@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">DraftRig 3D</string>
+    <string name="studio_tagline">Offline 3D Modeling, Rigging &amp; Animation</string>
+    <string name="tab_projects">Projects</string>
+    <string name="tab_characters">Characters</string>
+    <string name="tab_assets">Assets</string>
+    <string name="tab_creator">Creator</string>
+    <string name="action_quick_start">Quick-Start Rigged Scene</string>
+    <string name="action_new_project">New Blank Scene</string>
+    <string name="action_import_blender">Import 3D Model</string>
+    <string name="action_export">Export</string>
+    <string name="action_save">Save</string>
+    <string name="mode_object">Object</string>
+    <string name="mode_edit">Edit</string>
+    <string name="mode_pose">Rig / Pose</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_play_pause">Play or pause timeline</string>
+    <string name="cd_add_keyframe">Insert keyframe at current frame</string>
+    <string name="cd_viewport">Interactive 3D OpenGL ES viewport</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "DraftRig 3D",
+  "description": "Offline-first Android 3D modeling, skeletal rigging, and keyframe animation studio with custom OpenGL ES 3.0 rendering, Blender GLB/glTF/OBJ/STL import, and local MP4 video export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
