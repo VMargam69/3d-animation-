@@ -29,6 +29,9 @@ interface StudioDao {
     @Query("SELECT COUNT(*) FROM library_assets")
     suspend fun countLibraryAssets(): Int
 
+    @Query("SELECT id FROM library_assets")
+    suspend fun getAllLibraryAssetIds(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLibraryAsset(asset: LibraryAssetEntity)
 

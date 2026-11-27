@@ -113,6 +113,7 @@ fun StudioInspectorPanel(
     onRenameBone: (String) -> Unit,
     onDeleteBone: () -> Unit,
     onUpdateBonePose: (Vec3, Float?) -> Unit,
+    onResetPose: () -> Unit,
     onAutoBindWeights: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -226,6 +227,7 @@ fun StudioInspectorPanel(
                         onRenameBone = onRenameBone,
                         onDeleteBone = onDeleteBone,
                         onUpdateBonePose = onUpdateBonePose,
+                        onResetPose = onResetPose,
                         onAutoBindWeights = onAutoBindWeights
                     )
                 }
@@ -542,6 +544,7 @@ private fun RiggingInspectorContent(
     onRenameBone: (String) -> Unit,
     onDeleteBone: () -> Unit,
     onUpdateBonePose: (Vec3, Float?) -> Unit,
+    onResetPose: () -> Unit,
     onAutoBindWeights: () -> Unit
 ) {
     if (node == null) {
@@ -607,9 +610,16 @@ private fun RiggingInspectorContent(
         ) { Icon(Icons.Rounded.DeleteOutline, "Delete bone", tint = DangerRed, modifier = Modifier.size(16.dp)) }
     }
 
-    OutlinedButton(
-        onClick = onAutoBindWeights,
-        modifier = Modifier.fillMaxWidth(),
-        border = BorderStroke(1.dp, StudioCyan)
-    ) { Text("Auto-Bind Mesh Weights to Skeleton", color = StudioCyan) }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = onResetPose,
+            modifier = Modifier.weight(1f).testTag("rig_reset_pose_button"),
+            border = BorderStroke(1.dp, HairlineBorder)
+        ) { Text("Reset Pose", color = TextPrimary) }
+        OutlinedButton(
+            onClick = onAutoBindWeights,
+            modifier = Modifier.weight(1f),
+            border = BorderStroke(1.dp, StudioCyan)
+        ) { Text("Auto-Bind", color = StudioCyan) }
+    }
 }

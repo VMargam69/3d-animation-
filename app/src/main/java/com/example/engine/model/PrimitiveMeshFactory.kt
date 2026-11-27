@@ -18,7 +18,8 @@ data class CharacterBuildSpec(
     val accessory: AccessoryKind = costume.accessory,
     val roughness: Float = 0.45f,
     val metallic: Float = 0.15f,
-    val styleId: String? = null
+    val styleId: String? = null,
+    val skinColorOverride: Long? = null
 )
 
 enum class CharacterArchetype {
@@ -443,6 +444,8 @@ private data class HumanoidStyleProfile(
     val belt: Long = 0xFF2B211B,
     val eyeColor: Long = 0xFF1A1E2B,
     val isMannequin: Boolean = false,
+    val isCyberBot: Boolean = false,
+    val isKnight: Boolean = false,
     val isFemale: Boolean = false,
     val hasMustache: Boolean = false,
     val hasBeard: Boolean = false,
@@ -455,6 +458,7 @@ private data class HumanoidStyleProfile(
     val hasSash: Boolean = false,
     val hasTie: Boolean = false,
     val hasStethoscope: Boolean = false,
+    val hasPearlMala: Boolean = false,
     val shortSleeves: Boolean = false
 )
 
@@ -489,11 +493,21 @@ object CharacterMeshBuilder {
     }
 
     private fun resolveProfile(spec: CharacterBuildSpec): HumanoidStyleProfile {
-        return when (spec.styleId) {
+        val base = when (spec.styleId) {
             "char_desi_hero" -> HumanoidStyleProfile(
                 skin = 0xFFD99B6E, hair = 0xFF1C1614, shirt = spec.primaryColor, accent = spec.secondaryColor,
                 pants = 0xFFF5EFE0, shoes = 0xFFB45309, belt = 0xFFF59E0B,
-                hasMustache = true, hasLongTunic = true, hasSash = true
+                hasMustache = true, hasLongTunic = true, hasSash = true, hasPearlMala = true
+            )
+            "char_cyber_bot" -> HumanoidStyleProfile(
+                skin = 0xFFE2E8F0, hair = 0xFF22D3EE, shirt = spec.primaryColor, accent = spec.secondaryColor,
+                pants = 0xFF334155, shoes = 0xFF1E293B, belt = 0xFF6366F1,
+                eyeColor = 0xFF22D3EE, isMannequin = true, isCyberBot = true, hasChestArmor = true
+            )
+            "char_royal_knight" -> HumanoidStyleProfile(
+                skin = 0xFFCBD5E1, hair = 0xFF6366F1, shirt = spec.primaryColor, accent = spec.secondaryColor,
+                pants = 0xFF334155, shoes = 0xFF475569, belt = 0xFFF59E0B,
+                eyeColor = 0xFF38BDF8, isKnight = true, hasChestArmor = true
             )
             "char_desi_police" -> HumanoidStyleProfile(
                 skin = 0xFFCC8D5E, hair = 0xFF1A1512, shirt = 0xFFA6814C, accent = 0xFFFACC15,
@@ -508,7 +522,7 @@ object CharacterMeshBuilder {
             "char_indo_dancer" -> HumanoidStyleProfile(
                 skin = 0xFFCC8C5A, hair = 0xFF1B1615, shirt = spec.primaryColor, accent = spec.secondaryColor,
                 pants = 0xFF1E293B, shoes = 0xFFD97706, belt = 0xFFFACC15,
-                hasChestArmor = true, hasSash = true, shortSleeves = true
+                hasChestArmor = true, hasSash = true, hasPearlMala = true, shortSleeves = true
             )
             "char_village_farmer" -> HumanoidStyleProfile(
                 skin = 0xFFC28254, hair = 0xFFD1D5DB, shirt = spec.primaryColor, accent = 0xFFDC2626,
@@ -533,7 +547,7 @@ object CharacterMeshBuilder {
             else -> when (spec.costume) {
                 CostumePreset.INDIAN_TRADITIONAL -> HumanoidStyleProfile(
                     skin = 0xFFD99B6E, hair = 0xFF1E1815, shirt = spec.primaryColor, accent = spec.secondaryColor,
-                    pants = 0xFFF5EFE0, shoes = 0xFFB45309, hasMustache = true, hasLongTunic = true, hasSash = true
+                    pants = 0xFFF5EFE0, shoes = 0xFFB45309, hasMustache = true, hasLongTunic = true, hasSash = true, hasPearlMala = true
                 )
                 CostumePreset.POLICE -> HumanoidStyleProfile(
                     skin = 0xFFCC8D5E, hair = 0xFF1A1512, shirt = spec.primaryColor, accent = spec.secondaryColor,
@@ -553,7 +567,7 @@ object CharacterMeshBuilder {
                 )
                 CostumePreset.MYTHOLOGICAL -> HumanoidStyleProfile(
                     skin = 0xFFCC8C5A, hair = 0xFF1B1615, shirt = spec.primaryColor, accent = spec.secondaryColor,
-                    pants = 0xFF1E293B, shoes = 0xFFD97706, hasChestArmor = true, hasSash = true, shortSleeves = true
+                    pants = 0xFF1E293B, shoes = 0xFFD97706, hasChestArmor = true, hasSash = true, hasPearlMala = true, shortSleeves = true
                 )
                 CostumePreset.FANTASY, CostumePreset.HISTORICAL -> HumanoidStyleProfile(
                     skin = 0xFFEAC0A2, hair = 0xFF3A2418, shirt = spec.primaryColor, accent = spec.secondaryColor,
@@ -569,6 +583,9 @@ object CharacterMeshBuilder {
                 )
             }
         }
+        return if (spec.skinColorOverride != null && !base.isMannequin && !base.isKnight) {
+            base.copy(skin = spec.skinColorOverride)
+        } else base
     }
 
     private fun buildHumanoid(spec: CharacterBuildSpec): SceneNode {
@@ -693,31 +710,89 @@ object CharacterMeshBuilder {
         }
         if (p.hasChestArmor) {
             // Sculpted hero / royal chestplate + central emblem / core
-            addPart(PrimitiveMeshFactory.createCube(1f, 0.36f * tw, 0.24f * h, 0.07f), 1, lightenColor(p.shirt, 1.12f), Vec3(0f, 1.39f * h, 0.145f * tw))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.055f * tw, 10, 8), 1, p.accent, Vec3(0f, 1.40f * h, 0.185f * tw), scale = Vec3(1.1f, 1.1f, 0.55f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.36f * tw, 0.25f * h, 0.08f), 1, lightenColor(p.shirt, 1.12f), Vec3(0f, 1.39f * h, 0.145f * tw))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.056f * tw, 10, 8), 1, p.accent, Vec3(0f, 1.40f * h, 0.188f * tw), scale = Vec3(1.1f, 1.1f, 0.55f))
             // Shoulder pauldrons
-            addPart(PrimitiveMeshFactory.createUvSphere(0.115f * lt, 10, 8), 3, p.accent, Vec3(-0.34f * tw, 1.50f * h, 0f), scale = Vec3(1.15f, 0.78f, 1.05f))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.115f * lt, 10, 8), 5, p.accent, Vec3(0.34f * tw, 1.50f * h, 0f), scale = Vec3(1.15f, 0.78f, 1.05f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.118f * lt, 10, 8), 3, p.accent, Vec3(-0.34f * tw, 1.50f * h, 0f), scale = Vec3(1.15f, 0.78f, 1.05f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.118f * lt, 10, 8), 5, p.accent, Vec3(0.34f * tw, 1.50f * h, 0f), scale = Vec3(1.15f, 0.78f, 1.05f))
+        }
+        if (p.hasPearlMala) {
+            // Festive beaded royal necklace / mala around chest
+            for (k in -3..3) {
+                val angle = k * 0.28f
+                addPart(
+                    PrimitiveMeshFactory.createUvSphere(0.017f * tw, 6, 6),
+                    bone = 1,
+                    color = if (k == 0) 0xFF22D3EE else 0xFFFFFBEB,
+                    pos = Vec3(sin(angle) * 0.145f * tw, (1.50f - cos(angle) * 0.11f) * h, 0.155f * tw + cos(angle) * 0.025f)
+                )
+            }
+        }
+        if (p.isCyberBot) {
+            // Nova Cyber Bot glowing reactor ring & twin jet thrusters on back
+            addPart(PrimitiveMeshFactory.createTorus(0.068f * tw, 0.016f, 14, 8), 1, 0xFF22D3EE, Vec3(0f, 1.40f * h, 0.195f * tw), rot = Vec3(90f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.28f * tw, 0.34f * h, 0.12f), 1, 0xFF1E293B, Vec3(0f, 1.36f * h, -0.20f * tw))
+            for (sign in listOf(-1f, 1f)) {
+                addPart(PrimitiveMeshFactory.createCylinder(0.052f * tw, 0.068f * tw, 0.16f * h, 10), 1, 0xFF475569, Vec3(sign * 0.085f * tw, 1.24f * h, -0.25f * tw))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.042f * tw, 8, 6), 1, 0xFF22D3EE, Vec3(sign * 0.085f * tw, 1.15f * h, -0.25f * tw))
+            }
+        }
+        if (p.isKnight) {
+            // Royal Knight golden cross emblem on breastplate & articulated waist tassets + crimson cape
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.045f * tw, 0.20f * h, 0.03f), 1, 0xFFFACC15, Vec3(0f, 1.39f * h, 0.195f * tw))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.16f * tw, 0.045f * h, 0.03f), 1, 0xFFFACC15, Vec3(0f, 1.42f * h, 0.195f * tw))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.14f * tw, 0.22f * h, 0.05f), 0, p.shirt, Vec3(-0.15f * tw, 0.80f * h, 0.12f * tw), rot = Vec3(0f, 0f, 6f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.14f * tw, 0.22f * h, 0.05f), 0, p.shirt, Vec3(0.15f * tw, 0.80f * h, 0.12f * tw), rot = Vec3(0f, 0f, -6f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.54f * tw, 0.92f * h, 0.04f), 1, 0xFF991B1B, Vec3(0f, 1.07f * h, -0.20f * tw), rot = Vec3(9f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.56f * tw, 0.055f * h, 0.045f), 1, 0xFFFACC15, Vec3(0f, 0.62f * h, -0.27f * tw), rot = Vec3(9f, 0f, 0f))
         }
 
-        // === 2: SCULPTED HEAD, FACE, EYES, BROWS, HAIR, FACIAL HAIR ===
+        // === 2: SCULPTED HEAD, FACE, EXPRESSIVE CATCHLIGHT EYES, HAIR, HELMS ===
         // Neck
         addPart(
             PrimitiveMeshFactory.createCylinder(0.068f * hs, 0.082f * hs, 0.14f * h, 10),
-            bone = 2, color = p.skin, pos = Vec3(0f, 1.61f * h, 0f)
+            bone = 2, color = if (p.isCyberBot) 0xFF334155 else p.skin, pos = Vec3(0f, 1.61f * h, 0f)
         )
         // Main cranium / face ellipsoid
         addPart(
-            PrimitiveMeshFactory.createUvSphere(0.185f * hs, 16, 12),
+            PrimitiveMeshFactory.createUvSphere(0.19f * hs, 16, 12),
             bone = 2, color = p.skin, pos = Vec3(0f, 1.81f * h, 0f), scale = Vec3(0.95f, 1.08f, 0.98f)
         )
         // Ears
-        if (!p.isMannequin) {
-            addPart(PrimitiveMeshFactory.createUvSphere(0.042f * hs, 8, 6), 2, p.skin, Vec3(-0.175f * hs, 1.80f * h, -0.01f * hs), scale = Vec3(0.45f, 1.1f, 0.75f))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.042f * hs, 8, 6), 2, p.skin, Vec3(0.175f * hs, 1.80f * h, -0.01f * hs), scale = Vec3(0.45f, 1.1f, 0.75f))
+        if (!p.isMannequin && !p.isKnight) {
+            addPart(PrimitiveMeshFactory.createUvSphere(0.042f * hs, 8, 6), 2, p.skin, Vec3(-0.178f * hs, 1.80f * h, -0.01f * hs), scale = Vec3(0.45f, 1.1f, 0.75f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.042f * hs, 8, 6), 2, p.skin, Vec3(0.178f * hs, 1.80f * h, -0.01f * hs), scale = Vec3(0.45f, 1.1f, 0.75f))
         }
 
-        if (p.isMannequin) {
+        if (p.isCyberBot) {
+            // Sleek glossy droid helmet + curved dark OLED face screen + friendly glowing cyan eyes + twin antennae
+            addPart(PrimitiveMeshFactory.createUvSphere(0.205f * hs, 14, 10), 2, 0xFFF8FAFC, Vec3(0f, 1.83f * h, -0.015f * hs), scale = Vec3(1.06f, 0.98f, 1.02f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.165f * hs, 14, 10), 2, 0xFF0B1120, Vec3(0f, 1.82f * h, 0.065f * hs), scale = Vec3(1.02f, 0.76f, 0.85f))
+            // Glowing expressive cyan droid eyes + smile arc
+            addPart(PrimitiveMeshFactory.createUvSphere(0.036f * hs, 8, 6), 2, 0xFF22D3EE, Vec3(-0.066f * hs, 1.835f * h, 0.188f * hs), scale = Vec3(1.05f, 1.25f, 0.45f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.036f * hs, 8, 6), 2, 0xFF22D3EE, Vec3(0.066f * hs, 1.835f * h, 0.188f * hs), scale = Vec3(1.05f, 1.25f, 0.45f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.012f * hs, 6, 6), 2, 0xFFFFFFFF, Vec3(-0.056f * hs, 1.850f * h, 0.204f * hs))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.012f * hs, 6, 6), 2, 0xFFFFFFFF, Vec3(0.076f * hs, 1.850f * h, 0.204f * hs))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.065f * hs, 0.014f * hs, 0.02f * hs), 2, 0xFF38BDF8, Vec3(0f, 1.76f * h, 0.190f * hs))
+            // Ear audio pods + twin cyan-tipped antennae
+            for (sign in listOf(-1f, 1f)) {
+                addPart(PrimitiveMeshFactory.createCylinder(0.052f * hs, 0.052f * hs, 0.06f * hs, 10), 2, 0xFF6366F1, Vec3(sign * 0.205f * hs, 1.83f * h, 0f), rot = Vec3(0f, 0f, 90f))
+                addPart(PrimitiveMeshFactory.createCylinder(0.012f * hs, 0.016f * hs, 0.18f * hs, 8), 2, 0xFF94A3B8, Vec3(sign * 0.13f * hs, 2.04f * h, -0.02f * hs), rot = Vec3(0f, 0f, sign * -22f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.028f * hs, 8, 6), 2, 0xFF22D3EE, Vec3(sign * 0.165f * hs, 2.13f * h, -0.02f * hs))
+            }
+        } else if (p.isKnight) {
+            // Sculpted Medieval Steel Visored Helm + Golden Brow Trim + Flowing Indigo Crest Plume
+            addPart(PrimitiveMeshFactory.createUvSphere(0.21f * hs, 14, 12), 2, 0xFFCBD5E1, Vec3(0f, 1.84f * h, -0.01f * hs), scale = Vec3(0.98f, 1.08f, 1.06f))
+            // Angular T-visor & glowing eyes behind slit
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.22f * hs, 0.042f * hs, 0.08f * hs), 2, 0xFF0F172A, Vec3(0f, 1.84f * h, 0.175f * hs))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.036f * hs, 0.13f * hs, 0.08f * hs), 2, 0xFF0F172A, Vec3(0f, 1.78f * h, 0.175f * hs))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.018f * hs, 6, 6), 2, 0xFF38BDF8, Vec3(-0.055f * hs, 1.84f * h, 0.198f * hs))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.018f * hs, 6, 6), 2, 0xFF38BDF8, Vec3(0.055f * hs, 1.84f * h, 0.198f * hs))
+            // Golden crown-band & tall crest plume
+            addPart(PrimitiveMeshFactory.createTorus(0.185f * hs, 0.022f * hs, 14, 8), 2, 0xFFFACC15, Vec3(0f, 1.91f * h, 0f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.05f * hs, 0.16f * hs, 0.34f * hs), 2, p.accent, Vec3(0f, 2.04f * h, -0.03f * hs), rot = Vec3(-12f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.075f * hs, 10, 8), 2, p.accent, Vec3(0f, 2.02f * h, -0.22f * hs), scale = Vec3(0.65f, 1.15f, 1.45f))
+        } else if (p.isMannequin) {
             // Futuristic Studio Mannequin glowing visor + head crest
             addPart(PrimitiveMeshFactory.createCube(1f, 0.25f * hs, 0.072f * hs, 0.08f * hs), 2, 0xFF0F172A, Vec3(0f, 1.83f * h, 0.155f * hs))
             addPart(PrimitiveMeshFactory.createCube(1f, 0.21f * hs, 0.036f * hs, 0.04f * hs), 2, 0xFF22D3EE, Vec3(0f, 1.83f * h, 0.182f * hs))
@@ -725,88 +800,116 @@ object CharacterMeshBuilder {
             addPart(PrimitiveMeshFactory.createCylinder(0.042f * hs, 0.042f * hs, 0.05f * hs, 10), 2, 0xFF22D3EE, Vec3(-0.18f * hs, 1.82f * h, 0f), rot = Vec3(0f, 0f, 90f))
             addPart(PrimitiveMeshFactory.createCylinder(0.042f * hs, 0.042f * hs, 0.05f * hs, 10), 2, 0xFF22D3EE, Vec3(0.18f * hs, 1.82f * h, 0f), rot = Vec3(0f, 0f, 90f))
         } else {
-            // Expressive eyes (white sclera + dark iris/pupil)
-            addPart(PrimitiveMeshFactory.createUvSphere(0.030f * hs, 8, 6), 2, 0xFFF8FAFC, Vec3(-0.062f * hs, 1.83f * h, 0.155f * hs), scale = Vec3(1.05f, 0.88f, 0.55f))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.030f * hs, 8, 6), 2, 0xFFF8FAFC, Vec3(0.062f * hs, 1.83f * h, 0.155f * hs), scale = Vec3(1.05f, 0.88f, 0.55f))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.017f * hs, 8, 6), 2, p.eyeColor, Vec3(-0.062f * hs, 1.83f * h, 0.172f * hs), scale = Vec3(1f, 1f, 0.6f))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.017f * hs, 8, 6), 2, p.eyeColor, Vec3(0.062f * hs, 1.83f * h, 0.172f * hs), scale = Vec3(1f, 1f, 0.6f))
+            // Expressive stylized eyes (white sclera + deep iris + crisp white catchlight glint!)
+            addPart(PrimitiveMeshFactory.createUvSphere(0.033f * hs, 8, 6), 2, 0xFFF8FAFC, Vec3(-0.062f * hs, 1.83f * h, 0.158f * hs), scale = Vec3(1.08f, 0.92f, 0.55f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.033f * hs, 8, 6), 2, 0xFFF8FAFC, Vec3(0.062f * hs, 1.83f * h, 0.158f * hs), scale = Vec3(1.08f, 0.92f, 0.55f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.019f * hs, 8, 6), 2, p.eyeColor, Vec3(-0.062f * hs, 1.83f * h, 0.175f * hs), scale = Vec3(1f, 1.05f, 0.6f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.019f * hs, 8, 6), 2, p.eyeColor, Vec3(0.062f * hs, 1.83f * h, 0.175f * hs), scale = Vec3(1f, 1.05f, 0.6f))
+            // Crisp specular catchlight dots for lifelike Pixar/Blender appeal
+            addPart(PrimitiveMeshFactory.createUvSphere(0.007f * hs, 6, 4), 2, 0xFFFFFFFF, Vec3(-0.054f * hs, 1.840f * h, 0.187f * hs))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.007f * hs, 6, 4), 2, 0xFFFFFFFF, Vec3(0.070f * hs, 1.840f * h, 0.187f * hs))
             // Eyebrows
-            addPart(PrimitiveMeshFactory.createCube(1f, 0.062f * hs, 0.016f * hs, 0.025f * hs), 2, p.hair, Vec3(-0.064f * hs, 1.875f * h, 0.165f * hs), rot = Vec3(0f, 0f, 6f))
-            addPart(PrimitiveMeshFactory.createCube(1f, 0.062f * hs, 0.016f * hs, 0.025f * hs), 2, p.hair, Vec3(0.064f * hs, 1.875f * h, 0.165f * hs), rot = Vec3(0f, 0f, -6f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.064f * hs, 0.016f * hs, 0.025f * hs), 2, p.hair, Vec3(-0.064f * hs, 1.878f * h, 0.168f * hs), rot = Vec3(0f, 0f, 6f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.064f * hs, 0.016f * hs, 0.025f * hs), 2, p.hair, Vec3(0.064f * hs, 1.878f * h, 0.168f * hs), rot = Vec3(0f, 0f, -6f))
             // Sculpted nose bridge
-            addPart(PrimitiveMeshFactory.createUvSphere(0.024f * hs, 8, 6), 2, darkenColor(p.skin, 0.93f), Vec3(0f, 1.79f * h, 0.178f * hs), scale = Vec3(0.85f, 1.25f, 1.15f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.024f * hs, 8, 6), 2, darkenColor(p.skin, 0.93f), Vec3(0f, 1.79f * h, 0.182f * hs), scale = Vec3(0.85f, 1.25f, 1.15f))
+            // Warm cheek warmth on female characters
+            if (p.isFemale) {
+                addPart(PrimitiveMeshFactory.createUvSphere(0.028f * hs, 6, 6), 2, 0xFFE58A8A, Vec3(-0.105f * hs, 1.775f * h, 0.145f * hs), scale = Vec3(1.1f, 0.6f, 0.45f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.028f * hs, 6, 6), 2, 0xFFE58A8A, Vec3(0.105f * hs, 1.775f * h, 0.145f * hs), scale = Vec3(1.1f, 0.6f, 0.45f))
+            }
             // Warm mouth / lips
             addPart(
                 PrimitiveMeshFactory.createCube(1f, 0.068f * hs, 0.015f * hs, 0.022f * hs),
                 bone = 2,
                 color = if (p.isFemale) 0xFFD96B78 else darkenColor(p.skin, 0.72f),
-                pos = Vec3(0f, 1.725f * h, 0.162f * hs)
+                pos = Vec3(0f, 1.725f * h, 0.166f * hs)
             )
             // Mustache & Beard
             if (p.hasMustache) {
-                addPart(PrimitiveMeshFactory.createCube(1f, 0.056f * hs, 0.022f * hs, 0.028f * hs), 2, p.hair, Vec3(-0.030f * hs, 1.752f * h, 0.174f * hs), rot = Vec3(0f, 0f, 12f))
-                addPart(PrimitiveMeshFactory.createCube(1f, 0.056f * hs, 0.022f * hs, 0.028f * hs), 2, p.hair, Vec3(0.030f * hs, 1.752f * h, 0.174f * hs), rot = Vec3(0f, 0f, -12f))
+                addPart(PrimitiveMeshFactory.createCube(1f, 0.056f * hs, 0.022f * hs, 0.028f * hs), 2, p.hair, Vec3(-0.030f * hs, 1.752f * h, 0.178f * hs), rot = Vec3(0f, 0f, 12f))
+                addPart(PrimitiveMeshFactory.createCube(1f, 0.056f * hs, 0.022f * hs, 0.028f * hs), 2, p.hair, Vec3(0.030f * hs, 1.752f * h, 0.178f * hs), rot = Vec3(0f, 0f, -12f))
             }
             if (p.hasBeard) {
-                addPart(PrimitiveMeshFactory.createUvSphere(0.115f * hs, 10, 8), 2, p.hair, Vec3(0f, 1.69f * h, 0.095f * hs), scale = Vec3(1.1f, 0.85f, 0.82f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.115f * hs, 10, 8), 2, p.hair, Vec3(0f, 1.69f * h, 0.098f * hs), scale = Vec3(1.1f, 0.85f, 0.82f))
             }
 
             // Sculpted Hairstyles
             if (p.isFemale) {
-                // Full sculpted hair cap + side locks + back bun/ponytail
-                addPart(PrimitiveMeshFactory.createUvSphere(0.196f * hs, 14, 10), 2, p.hair, Vec3(0f, 1.855f * h, -0.022f * hs), scale = Vec3(1.02f, 1.02f, 1.02f))
-                addPart(PrimitiveMeshFactory.createCapsule(0.055f * hs, 0.18f * h, 8), 2, p.hair, Vec3(-0.155f * hs, 1.76f * h, -0.02f * hs))
-                addPart(PrimitiveMeshFactory.createCapsule(0.055f * hs, 0.18f * h, 8), 2, p.hair, Vec3(0.155f * hs, 1.76f * h, -0.02f * hs))
-                addPart(PrimitiveMeshFactory.createUvSphere(0.095f * hs, 10, 8), 2, p.hair, Vec3(0f, 1.82f * h, -0.195f * hs))
+                // Full sculpted hair cap + side locks + back bun/ponytail + accent ribbon
+                addPart(PrimitiveMeshFactory.createUvSphere(0.200f * hs, 14, 10), 2, p.hair, Vec3(0f, 1.855f * h, -0.022f * hs), scale = Vec3(1.02f, 1.02f, 1.02f))
+                addPart(PrimitiveMeshFactory.createCapsule(0.055f * hs, 0.18f * h, 8), 2, p.hair, Vec3(-0.158f * hs, 1.76f * h, -0.02f * hs))
+                addPart(PrimitiveMeshFactory.createCapsule(0.055f * hs, 0.18f * h, 8), 2, p.hair, Vec3(0.158f * hs, 1.76f * h, -0.02f * hs))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.095f * hs, 10, 8), 2, p.hair, Vec3(0f, 1.82f * h, -0.198f * hs))
+                addPart(PrimitiveMeshFactory.createTorus(0.068f * hs, 0.018f * hs, 10, 6), 2, p.accent, Vec3(0f, 1.83f * h, -0.155f * hs), rot = Vec3(90f, 0f, 0f))
                 // Swept bangs
-                addPart(PrimitiveMeshFactory.createCube(1f, 0.20f * hs, 0.065f * hs, 0.09f * hs), 2, p.hair, Vec3(-0.02f * hs, 1.935f * h, 0.115f * hs), rot = Vec3(0f, 0f, 8f))
+                addPart(PrimitiveMeshFactory.createCube(1f, 0.20f * hs, 0.065f * hs, 0.09f * hs), 2, p.hair, Vec3(-0.02f * hs, 1.938f * h, 0.118f * hs), rot = Vec3(0f, 0f, 8f))
             } else {
                 // Layered masculine hair cap + sculpted top volume
-                addPart(PrimitiveMeshFactory.createUvSphere(0.192f * hs, 14, 10), 2, p.hair, Vec3(0f, 1.86f * h, -0.028f * hs), scale = Vec3(1.0f, 0.96f, 0.98f))
-                addPart(PrimitiveMeshFactory.createUvSphere(0.145f * hs, 10, 8), 2, p.hair, Vec3(0.02f * hs, 1.94f * h, 0.03f * hs), scale = Vec3(1.15f, 0.56f, 1.05f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.196f * hs, 14, 10), 2, p.hair, Vec3(0f, 1.86f * h, -0.028f * hs), scale = Vec3(1.0f, 0.96f, 0.98f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.148f * hs, 10, 8), 2, p.hair, Vec3(0.02f * hs, 1.945f * h, 0.03f * hs), scale = Vec3(1.15f, 0.56f, 1.05f))
             }
         }
 
-        // === 3..6: ARMS, JOINT ACCENTS, HANDS ===
+        // === 3..6: ARMS, PINCH-FREE ELBOW JOINTS, SCULPTED HANDS WITH THUMBS ===
         val upperSleeveCol = p.shirt
-        val forearmCol = if (p.shortSleeves) p.skin else if (p.isMannequin) 0xFF1E293B else p.shirt
-        val handCol = if (p.isMannequin) p.accent else p.skin
+        val forearmCol = if (p.shortSleeves) p.skin else if (p.isMannequin && !p.isCyberBot) 0xFF1E293B else if (p.isKnight) 0xFFCBD5E1 else p.shirt
+        val handCol = if (p.isMannequin) p.accent else if (p.isKnight) 0xFF94A3B8 else p.skin
 
         // Left Arm (3 = upper arm, 4 = forearm)
-        addPart(PrimitiveMeshFactory.createUvSphere(0.082f * lt, 10, 8), 3, upperSleeveCol, Vec3(-0.33f * tw, 1.48f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.084f * lt, 10, 8), 3, upperSleeveCol, Vec3(-0.33f * tw, 1.48f * h, 0f))
         addPart(PrimitiveMeshFactory.createCapsule(0.072f * lt, 0.24f * h, 10), 3, upperSleeveCol, Vec3(-0.34f * tw, 1.32f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.066f * lt, 8, 6), 4, forearmCol, Vec3(-0.34f * tw, 1.15f * h, 0f)) // Smooth elbow joint sphere
         addPart(PrimitiveMeshFactory.createCapsule(0.060f * lt, 0.24f * h, 10), 4, forearmCol, Vec3(-0.34f * tw, 0.99f * h, 0f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.056f * lt, 8, 6), 4, handCol, Vec3(-0.34f * tw, 0.81f * h, 0.015f), scale = Vec3(0.85f, 1.15f, 0.95f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.058f * lt, 8, 6), 4, handCol, Vec3(-0.34f * tw, 0.81f * h, 0.015f), scale = Vec3(0.85f, 1.15f, 0.95f))
+        addPart(PrimitiveMeshFactory.createCapsule(0.018f * lt, 0.045f * h, 6), 4, handCol, Vec3(-0.305f * tw, 0.82f * h, 0.045f), rot = Vec3(24f, 0f, -24f))
 
         // Right Arm (5 = upper arm, 6 = forearm)
-        addPart(PrimitiveMeshFactory.createUvSphere(0.082f * lt, 10, 8), 5, upperSleeveCol, Vec3(0.33f * tw, 1.48f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.084f * lt, 10, 8), 5, upperSleeveCol, Vec3(0.33f * tw, 1.48f * h, 0f))
         addPart(PrimitiveMeshFactory.createCapsule(0.072f * lt, 0.24f * h, 10), 5, upperSleeveCol, Vec3(0.34f * tw, 1.32f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.066f * lt, 8, 6), 6, forearmCol, Vec3(0.34f * tw, 1.15f * h, 0f)) // Smooth elbow joint sphere
         addPart(PrimitiveMeshFactory.createCapsule(0.060f * lt, 0.24f * h, 10), 6, forearmCol, Vec3(0.34f * tw, 0.99f * h, 0f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.056f * lt, 8, 6), 6, handCol, Vec3(0.34f * tw, 0.81f * h, 0.015f), scale = Vec3(0.85f, 1.15f, 0.95f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.058f * lt, 8, 6), 6, handCol, Vec3(0.34f * tw, 0.81f * h, 0.015f), scale = Vec3(0.85f, 1.15f, 0.95f))
+        addPart(PrimitiveMeshFactory.createCapsule(0.018f * lt, 0.045f * h, 6), 6, handCol, Vec3(0.305f * tw, 0.82f * h, 0.045f), rot = Vec3(24f, 0f, 24f))
 
         if (p.isMannequin) {
-            // Glowing cyan elbow & wrist rings
+            // Glowing cyan elbow & wrist telemetry rings
             addPart(PrimitiveMeshFactory.createTorus(0.068f * lt, 0.016f, 12, 8), 4, 0xFF22D3EE, Vec3(-0.34f * tw, 1.15f * h, 0f))
             addPart(PrimitiveMeshFactory.createTorus(0.068f * lt, 0.016f, 12, 8), 6, 0xFF22D3EE, Vec3(0.34f * tw, 1.15f * h, 0f))
-        } else if (p.hasChestArmor && !p.isMannequin) {
-            // Royal wrist cuffs / armlets
-            addPart(PrimitiveMeshFactory.createCylinder(0.066f * lt, 0.066f * lt, 0.065f * h, 10), 4, p.accent, Vec3(-0.34f * tw, 0.90f * h, 0f))
-            addPart(PrimitiveMeshFactory.createCylinder(0.066f * lt, 0.066f * lt, 0.065f * h, 10), 6, p.accent, Vec3(0.34f * tw, 0.90f * h, 0f))
+            addPart(PrimitiveMeshFactory.createTorus(0.058f * lt, 0.014f, 10, 6), 4, 0xFF22D3EE, Vec3(-0.34f * tw, 0.88f * h, 0f))
+            addPart(PrimitiveMeshFactory.createTorus(0.058f * lt, 0.014f, 10, 6), 6, 0xFF22D3EE, Vec3(0.34f * tw, 0.88f * h, 0f))
+        } else if (p.hasChestArmor) {
+            // Royal wrist cuffs / armored gauntlets
+            addPart(PrimitiveMeshFactory.createCylinder(0.068f * lt, 0.068f * lt, 0.075f * h, 10), 4, p.accent, Vec3(-0.34f * tw, 0.90f * h, 0f))
+            addPart(PrimitiveMeshFactory.createCylinder(0.068f * lt, 0.068f * lt, 0.075f * h, 10), 6, p.accent, Vec3(0.34f * tw, 0.90f * h, 0f))
+        }
+        if (p.isKnight) {
+            // Forged silver broadsword with golden crossguard & indigo pommel bound to right forearm
+            addPart(PrimitiveMeshFactory.createCylinder(0.018f, 0.018f, 0.22f * h, 8), 6, 0xFF451A03, Vec3(0.36f * tw, 0.78f * h, 0.14f), rot = Vec3(85f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.032f, 8, 6), 6, 0xFFFACC15, Vec3(0.36f * tw, 0.77f * h, 0.03f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.22f, 0.032f, 0.04f), 6, 0xFFFACC15, Vec3(0.36f * tw, 0.79f * h, 0.24f))
+            addPart(PrimitiveMeshFactory.createCube(1f, 0.058f, 0.022f, 0.72f * h), 6, 0xFFE2E8F0, Vec3(0.36f * tw, 0.81f * h, 0.62f))
+            addPart(PrimitiveMeshFactory.createCylinder(0.006f, 0.036f, 0.16f * h, 6), 6, 0xFFF8FAFC, Vec3(0.36f * tw, 0.82f * h, 1.04f), rot = Vec3(90f, 0f, 0f))
         }
 
-        // === 7..10: LEGS, KNEES, SCULPTED SHOES/BOOTS ===
+        // === 7..10: LEGS, PINCH-FREE KNEE JOINTS, SCULPTED SHOES/BOOTS ===
         val thighCol = if (p.hasSkirt) p.skin else p.pants
-        val shinCol = if (p.hasSkirt) 0xFFF8FAFC else p.pants
+        val shinCol = if (p.hasSkirt) 0xFFF8FAFC else if (p.isKnight) 0xFF94A3B8 else p.pants
         // Left Leg
         addPart(PrimitiveMeshFactory.createCapsule(0.092f * lt, 0.30f * h, 10), 7, thighCol, Vec3(-0.145f * tw, 0.64f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.082f * lt, 8, 6), 8, shinCol, Vec3(-0.145f * tw, 0.45f * h, 0.01f)) // Smooth knee cap
         addPart(PrimitiveMeshFactory.createCapsule(0.075f * lt, 0.32f * h, 10), 8, shinCol, Vec3(-0.145f * tw, 0.25f * h, 0f))
         // Right Leg
         addPart(PrimitiveMeshFactory.createCapsule(0.092f * lt, 0.30f * h, 10), 9, thighCol, Vec3(0.145f * tw, 0.64f * h, 0f))
+        addPart(PrimitiveMeshFactory.createUvSphere(0.082f * lt, 8, 6), 10, shinCol, Vec3(0.145f * tw, 0.45f * h, 0.01f)) // Smooth knee cap
         addPart(PrimitiveMeshFactory.createCapsule(0.075f * lt, 0.32f * h, 10), 10, shinCol, Vec3(0.145f * tw, 0.25f * h, 0f))
 
         if (p.isMannequin) {
             addPart(PrimitiveMeshFactory.createTorus(0.084f * lt, 0.018f, 12, 8), 8, 0xFF22D3EE, Vec3(-0.145f * tw, 0.44f * h, 0f))
             addPart(PrimitiveMeshFactory.createTorus(0.084f * lt, 0.018f, 12, 8), 10, 0xFF22D3EE, Vec3(0.145f * tw, 0.44f * h, 0f))
+        } else if (p.isKnight) {
+            addPart(PrimitiveMeshFactory.createUvSphere(0.086f * lt, 8, 6), 8, 0xFFFACC15, Vec3(-0.145f * tw, 0.45f * h, 0.04f), scale = Vec3(0.85f, 0.85f, 0.55f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.086f * lt, 8, 6), 10, 0xFFFACC15, Vec3(0.145f * tw, 0.45f * h, 0.04f), scale = Vec3(0.85f, 0.85f, 0.55f))
         }
 
         // Sculpted Shoes / Boots (upper + rounded toe + dark sole)
@@ -818,7 +921,7 @@ object CharacterMeshBuilder {
         }
 
         // === ACCESSORIES ATTACHED TO REAL SKELETON BONES ===
-        when (spec.accessory) {
+        if (!p.isCyberBot && !p.isKnight) when (spec.accessory) {
             AccessoryKind.TURBAN -> {
                 // Multi-layered festive Pagdi turban with golden band & Kalgi jewel crest
                 addPart(PrimitiveMeshFactory.createTorus(0.165f * hs, 0.072f * hs, 16, 10), 2, p.shirt, Vec3(0f, 1.94f * h, -0.01f), rot = Vec3(-8f, 0f, 0f))
@@ -889,8 +992,18 @@ object CharacterMeshBuilder {
             material = MaterialData(
                 name = "${spec.costume.label} Mat",
                 baseColor = spec.primaryColor,
-                roughness = if (p.isMannequin) 0.28f else spec.roughness,
-                metallic = if (p.isMannequin) 0.55f else spec.metallic
+                roughness = when {
+                    p.isCyberBot -> 0.18f
+                    p.isKnight -> 0.24f
+                    p.isMannequin -> 0.28f
+                    else -> spec.roughness
+                },
+                metallic = when {
+                    p.isCyberBot -> 0.45f
+                    p.isKnight -> 0.78f
+                    p.isMannequin -> 0.55f
+                    else -> spec.metallic
+                }
             ),
             skeleton = skeleton,
             categoryTag = spec.category.name
@@ -989,9 +1102,10 @@ object CharacterMeshBuilder {
                 BoneNode("r_shin", "Back Right Leg", "hips", Vec3(0.18f, -0.08f, -0.34f), 0.56f)
             )
         )
+        val isRedPanda = spec.styleId == "char_red_panda"
         val coatMain = spec.primaryColor
         val coatLight = spec.secondaryColor
-        val coatDark = darkenColor(coatMain, 0.60f)
+        val coatDark = if (isRedPanda) 0xFF291711 else darkenColor(coatMain, 0.60f)
 
         val parts = mutableListOf<Triple<MeshData, Int, Long>>()
         fun addPart(mesh: MeshData, bone: Int, color: Long, pos: Vec3, rot: Vec3 = Vec3.ZERO, scale: Vec3 = Vec3.ONE) {
@@ -1002,54 +1116,92 @@ object CharacterMeshBuilder {
             parts += Triple(m, bone, color)
         }
 
-        // Muscular wolf ribcage, spine & hindquarters
-        addPart(PrimitiveMeshFactory.createCapsule(0.21f, 0.56f, 12), 0, coatMain, Vec3(0f, 0.72f, 0f), rot = Vec3(90f, 0f, 0f), scale = Vec3(1.0f, 0.96f, 1.0f))
-        // Fluffy lighter chest ruff & belly
-        addPart(PrimitiveMeshFactory.createUvSphere(0.24f, 12, 8), 0, coatLight, Vec3(0f, 0.74f, 0.32f), scale = Vec3(1.02f, 1.04f, 0.92f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.16f, 10, 8), 0, coatLight, Vec3(0f, 0.59f, 0.02f), scale = Vec3(0.95f, 0.60f, 2.2f))
+        if (isRedPanda) {
+            // Momo Red Panda — plush stylized rusty-amber body, dark belly & paws, cream face mask, ringed fluffy tail!
+            addPart(PrimitiveMeshFactory.createCapsule(0.22f, 0.46f, 12), 0, coatMain, Vec3(0f, 0.62f, 0f), rot = Vec3(90f, 0f, 0f), scale = Vec3(1.06f, 0.96f, 1.0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.18f, 10, 8), 0, coatDark, Vec3(0f, 0.52f, 0.04f), scale = Vec3(0.95f, 0.58f, 1.85f))
+            // Rounded adorable head with cream cheeks, eyebrow dots & snout
+            addPart(PrimitiveMeshFactory.createUvSphere(0.22f, 14, 12), 1, coatMain, Vec3(0f, 0.88f, 0.48f), scale = Vec3(1.12f, 0.96f, 1.02f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.11f, 10, 8), 1, coatLight, Vec3(-0.13f, 0.82f, 0.56f), scale = Vec3(0.95f, 0.78f, 0.85f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.11f, 10, 8), 1, coatLight, Vec3(0.13f, 0.82f, 0.56f), scale = Vec3(0.95f, 0.78f, 0.85f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.095f, 10, 8), 1, coatLight, Vec3(0f, 0.81f, 0.66f), scale = Vec3(1.05f, 0.78f, 0.92f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.042f, 8, 6), 1, 0xFF0F172A, Vec3(0f, 0.84f, 0.75f))
+            // Bright stylized eyes + white catchlights + cream brow spots
+            for (sign in listOf(-1f, 1f)) {
+                addPart(PrimitiveMeshFactory.createUvSphere(0.032f, 8, 6), 1, 0xFF0F172A, Vec3(sign * 0.088f, 0.90f, 0.655f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.011f, 6, 4), 1, 0xFFFFFFFF, Vec3(sign * 0.080f, 0.912f, 0.682f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.032f, 6, 6), 1, coatLight, Vec3(sign * 0.086f, 0.965f, 0.64f), scale = Vec3(1.1f, 0.68f, 0.5f))
+                // Rounded cream-rimmed red panda ears
+                addPart(PrimitiveMeshFactory.createUvSphere(0.082f, 10, 8), 1, coatLight, Vec3(sign * 0.17f, 1.07f, 0.45f), scale = Vec3(1.0f, 1.05f, 0.48f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.056f, 8, 6), 1, coatMain, Vec3(sign * 0.165f, 1.06f, 0.47f), scale = Vec3(0.95f, 0.95f, 0.42f))
+            }
+            // Four plush espresso-dark legs + rounded paws
+            val legSpecs = listOf(
+                Triple(-0.16f, 0.28f, 2), Triple(0.16f, 0.28f, 3),
+                Triple(-0.16f, -0.28f, 4), Triple(0.16f, -0.28f, 5)
+            )
+            for ((lx, lz, bone) in legSpecs) {
+                addPart(PrimitiveMeshFactory.createCapsule(0.072f, 0.26f, 10), bone, coatDark, Vec3(lx, 0.34f, lz))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.076f, 8, 6), bone, coatDark, Vec3(lx, 0.07f, lz + 0.04f), scale = Vec3(1.0f, 0.65f, 1.3f))
+            }
+            // Iconic striped fluffy ringed red panda tail (alternating amber & espresso rings)
+            for (ring in 0..5) {
+                val rColor = if (ring % 2 == 0) coatMain else coatDark
+                val rad = 0.115f - ring * 0.008f
+                addPart(
+                    PrimitiveMeshFactory.createUvSphere(rad, 10, 8),
+                    bone = 0,
+                    color = rColor,
+                    pos = Vec3(0f, 0.62f + ring * 0.032f, -0.46f - ring * 0.125f),
+                    scale = Vec3(1.0f, 0.95f, 1.15f)
+                )
+            }
+        } else {
+            // Muscular Timber Wolf ribcage, spine & hindquarters
+            addPart(PrimitiveMeshFactory.createCapsule(0.21f, 0.56f, 12), 0, coatMain, Vec3(0f, 0.72f, 0f), rot = Vec3(90f, 0f, 0f), scale = Vec3(1.0f, 0.96f, 1.0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.24f, 12, 8), 0, coatLight, Vec3(0f, 0.74f, 0.32f), scale = Vec3(1.02f, 1.04f, 0.92f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.16f, 10, 8), 0, coatLight, Vec3(0f, 0.59f, 0.02f), scale = Vec3(0.95f, 0.60f, 2.2f))
 
-        // Sculpted wolf neck & head
-        addPart(PrimitiveMeshFactory.createCylinder(0.14f, 0.19f, 0.24f, 10), 1, coatMain, Vec3(0f, 0.88f, 0.44f), rot = Vec3(26f, 0f, 0f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.175f, 14, 10), 1, coatMain, Vec3(0f, 0.99f, 0.56f), scale = Vec3(0.95f, 0.92f, 1.10f))
-        // Cheek fur tufts
-        addPart(PrimitiveMeshFactory.createUvSphere(0.095f, 8, 6), 1, coatLight, Vec3(-0.12f, 0.94f, 0.55f), scale = Vec3(0.85f, 0.75f, 1.0f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.095f, 8, 6), 1, coatLight, Vec3(0.12f, 0.94f, 0.55f), scale = Vec3(0.85f, 0.75f, 1.0f))
-        // Elongated muzzle + lower jaw + black nose
-        addPart(PrimitiveMeshFactory.createCylinder(0.065f, 0.105f, 0.24f, 10), 1, coatLight, Vec3(0f, 0.95f, 0.76f), rot = Vec3(92f, 0f, 0f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.044f, 8, 6), 1, 0xFF0F172A, Vec3(0f, 0.97f, 0.88f))
-        // Glowing amber wolf eyes
-        addPart(PrimitiveMeshFactory.createUvSphere(0.028f, 8, 6), 1, 0xFFF59E0B, Vec3(-0.088f, 1.03f, 0.68f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.028f, 8, 6), 1, 0xFFF59E0B, Vec3(0.088f, 1.03f, 0.68f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.015f, 6, 6), 1, 0xFF0F172A, Vec3(-0.092f, 1.03f, 0.70f))
-        addPart(PrimitiveMeshFactory.createUvSphere(0.015f, 6, 6), 1, 0xFF0F172A, Vec3(0.092f, 1.03f, 0.70f))
-        // Upright pointed ears
-        for (sign in listOf(-1f, 1f)) {
-            addPart(PrimitiveMeshFactory.createCylinder(0.01f, 0.065f, 0.19f, 8), 1, coatDark, Vec3(sign * 0.11f, 1.18f, 0.52f), rot = Vec3(-8f, 0f, sign * -12f))
-            addPart(PrimitiveMeshFactory.createCylinder(0.008f, 0.038f, 0.12f, 6), 1, coatLight, Vec3(sign * 0.11f, 1.16f, 0.54f), rot = Vec3(-8f, 0f, sign * -12f))
+            // Sculpted wolf neck & head
+            addPart(PrimitiveMeshFactory.createCylinder(0.14f, 0.19f, 0.24f, 10), 1, coatMain, Vec3(0f, 0.88f, 0.44f), rot = Vec3(26f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.175f, 14, 10), 1, coatMain, Vec3(0f, 0.99f, 0.56f), scale = Vec3(0.95f, 0.92f, 1.10f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.095f, 8, 6), 1, coatLight, Vec3(-0.12f, 0.94f, 0.55f), scale = Vec3(0.85f, 0.75f, 1.0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.095f, 8, 6), 1, coatLight, Vec3(0.12f, 0.94f, 0.55f), scale = Vec3(0.85f, 0.75f, 1.0f))
+            // Elongated muzzle + lower jaw + black nose
+            addPart(PrimitiveMeshFactory.createCylinder(0.065f, 0.105f, 0.24f, 10), 1, coatLight, Vec3(0f, 0.95f, 0.76f), rot = Vec3(92f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.044f, 8, 6), 1, 0xFF0F172A, Vec3(0f, 0.97f, 0.88f))
+            // Glowing amber wolf eyes + white catchlight dots
+            for (sign in listOf(-1f, 1f)) {
+                addPart(PrimitiveMeshFactory.createUvSphere(0.028f, 8, 6), 1, 0xFFF59E0B, Vec3(sign * 0.088f, 1.03f, 0.68f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.015f, 6, 6), 1, 0xFF0F172A, Vec3(sign * 0.092f, 1.03f, 0.70f))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.007f, 6, 4), 1, 0xFFFFFFFF, Vec3(sign * 0.086f, 1.04f, 0.712f))
+                addPart(PrimitiveMeshFactory.createCylinder(0.01f, 0.065f, 0.19f, 8), 1, coatDark, Vec3(sign * 0.11f, 1.18f, 0.52f), rot = Vec3(-8f, 0f, sign * -12f))
+                addPart(PrimitiveMeshFactory.createCylinder(0.008f, 0.038f, 0.12f, 6), 1, coatLight, Vec3(sign * 0.11f, 1.16f, 0.54f), rot = Vec3(-8f, 0f, sign * -12f))
+            }
+
+            // Four sculpted legs + paws
+            val legSpecs = listOf(
+                Triple(-0.16f, 0.34f, 2),
+                Triple(0.16f, 0.34f, 3),
+                Triple(-0.16f, -0.34f, 4),
+                Triple(0.16f, -0.34f, 5)
+            )
+            for ((lx, lz, bone) in legSpecs) {
+                addPart(PrimitiveMeshFactory.createCapsule(0.068f, 0.24f, 10), bone, coatMain, Vec3(lx, 0.48f, lz))
+                addPart(PrimitiveMeshFactory.createCapsule(0.052f, 0.26f, 10), bone, coatLight, Vec3(lx, 0.20f, lz))
+                addPart(PrimitiveMeshFactory.createUvSphere(0.064f, 8, 6), bone, coatLight, Vec3(lx, 0.045f, lz + 0.045f), scale = Vec3(0.95f, 0.65f, 1.35f))
+            }
+
+            // Bushy curved wolf tail with dark tip
+            addPart(PrimitiveMeshFactory.createCapsule(0.075f, 0.30f, 10), 0, coatMain, Vec3(0f, 0.74f, -0.60f), rot = Vec3(58f, 0f, 0f))
+            addPart(PrimitiveMeshFactory.createCylinder(0.02f, 0.078f, 0.20f, 10), 0, coatDark, Vec3(0f, 0.62f, -0.78f), rot = Vec3(122f, 0f, 0f))
         }
-
-        // Four sculpted legs + paws
-        val legSpecs = listOf(
-            Triple(-0.16f, 0.34f, 2),
-            Triple(0.16f, 0.34f, 3),
-            Triple(-0.16f, -0.34f, 4),
-            Triple(0.16f, -0.34f, 5)
-        )
-        for ((lx, lz, bone) in legSpecs) {
-            addPart(PrimitiveMeshFactory.createCapsule(0.068f, 0.24f, 10), bone, coatMain, Vec3(lx, 0.48f, lz))
-            addPart(PrimitiveMeshFactory.createCapsule(0.052f, 0.26f, 10), bone, coatLight, Vec3(lx, 0.20f, lz))
-            addPart(PrimitiveMeshFactory.createUvSphere(0.064f, 8, 6), bone, coatLight, Vec3(lx, 0.045f, lz + 0.045f), scale = Vec3(0.95f, 0.65f, 1.35f))
-        }
-
-        // Bushy curved wolf tail with dark tip
-        addPart(PrimitiveMeshFactory.createCapsule(0.075f, 0.30f, 10), 0, coatMain, Vec3(0f, 0.74f, -0.60f), rot = Vec3(58f, 0f, 0f))
-        addPart(PrimitiveMeshFactory.createCylinder(0.02f, 0.078f, 0.20f, 10), 0, coatDark, Vec3(0f, 0.62f, -0.78f), rot = Vec3(122f, 0f, 0f))
 
         return SceneNode(
             name = spec.name,
             nodeType = NodeType.CHARACTER,
             mesh = PrimitiveMeshFactory.mergeColoredMeshes(parts),
-            material = MaterialData(name = "${spec.name} Fur", baseColor = spec.primaryColor, roughness = 0.7f),
+            material = MaterialData(name = "${spec.name} Fur", baseColor = spec.primaryColor, roughness = 0.68f),
             skeleton = skeleton,
             categoryTag = spec.category.name
         )
@@ -1091,9 +1243,14 @@ object CharacterMeshBuilder {
         addPart(PrimitiveMeshFactory.createCube(1f, 0.18f, 0.10f, 0.05f), 0, 0xFFEF4444, Vec3(-0.40f, 0.62f, -1.00f))
         addPart(PrimitiveMeshFactory.createCube(1f, 0.18f, 0.10f, 0.05f), 0, 0xFFEF4444, Vec3(0.40f, 0.62f, -1.00f))
 
-        // Cabin frame, roof rack & tinted cyan windshield
+        // Cabin frame, roof rack, LED lightbar & tinted cyan windshield
         addPart(PrimitiveMeshFactory.createCube(1f, 0.98f, 0.08f, 1.02f), 0, darkTrim, Vec3(0f, 1.24f, -0.26f))
+        addPart(PrimitiveMeshFactory.createCube(1f, 0.82f, 0.06f, 0.07f), 0, 0xFF22D3EE, Vec3(0f, 1.31f, 0.20f))
         addPart(PrimitiveMeshFactory.createCube(1f, 0.90f, 0.36f, 0.07f), 0, glassCyan, Vec3(0f, 1.00f, 0.24f), rot = Vec3(-18f, 0f, 0f))
+        // Side mirrors & steering wheel
+        addPart(PrimitiveMeshFactory.createCube(1f, 0.11f, 0.08f, 0.06f), 0, darkTrim, Vec3(-0.62f, 0.92f, 0.22f))
+        addPart(PrimitiveMeshFactory.createCube(1f, 0.11f, 0.08f, 0.06f), 0, darkTrim, Vec3(0.62f, 0.92f, 0.22f))
+        addPart(PrimitiveMeshFactory.createTorus(0.09f, 0.018f, 12, 6), 0, 0xFF0F172A, Vec3(-0.24f, 0.92f, 0.08f), rot = Vec3(68f, 0f, 0f))
         // Roll-cage pillars
         for ((px, pz) in listOf(-0.46f to 0.20f, 0.46f to 0.20f, -0.46f to -0.72f, 0.46f to -0.72f)) {
             addPart(PrimitiveMeshFactory.createCylinder(0.036f, 0.036f, 0.48f, 8), 0, darkTrim, Vec3(px, 1.00f, pz))
@@ -1225,10 +1382,14 @@ object CharacterMeshBuilder {
         // Golden Kalasha spire finial
         addPart(PrimitiveMeshFactory.createUvSphere(0.10f, 10, 8), brassBright, Vec3(0f, 2.26f, 0f))
         addPart(PrimitiveMeshFactory.createCylinder(0.01f, 0.05f, 0.20f, 8), brassBright, Vec3(0f, 2.40f, 0f))
-        // Suspended ornate brass temple bell + chain + clapper
+        // Suspended ornate brass temple bell + chain + clapper + glowing corner Diya lotus lamps
         addPart(PrimitiveMeshFactory.createCylinder(0.02f, 0.02f, 0.34f, 8), stoneWarm, Vec3(0f, 1.18f, 0f))
         addPart(PrimitiveMeshFactory.createCylinder(0.11f, 0.23f, 0.32f, 14), brassBright, Vec3(0f, 0.90f, 0f))
         addPart(PrimitiveMeshFactory.createUvSphere(0.055f, 8, 6), terracotta, Vec3(0f, 0.73f, 0f))
+        for ((dx, dz) in listOf(-0.56f to 0.56f, 0.56f to 0.56f)) {
+            addPart(PrimitiveMeshFactory.createCylinder(0.08f, 0.05f, 0.06f, 10), terracotta, Vec3(dx, 0.29f, dz))
+            addPart(PrimitiveMeshFactory.createUvSphere(0.045f, 8, 6), 0xFFFEF08A, Vec3(dx, 0.35f, dz))
+        }
 
         return SceneNode(
             name = spec.name,

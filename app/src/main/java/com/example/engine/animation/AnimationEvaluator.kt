@@ -92,13 +92,20 @@ object AnimationEvaluator {
             fovs[node.id] = fov
         }
 
-        // Compute world matrices respecting parent-child hierarchy
+        // Compute world matrices respecting parent-child hierarchy (with cycle guard)
         val worldCache = HashMap<String, FloatArray>()
+        val visiting = HashSet<String>()
         fun worldMatrixOf(node: SceneNode): FloatArray {
             worldCache[node.id]?.let { return it }
             val local = (localTransforms[node.id] ?: node.transform).toMatrix()
+            if (!visiting.add(node.id)) return local
             val parent = node.parentId?.let { nodeMap[it] }
-            val world = if (parent != null) Math3D.multiply(worldMatrixOf(parent), local) else local
+            val world = if (parent != null && parent.id != node.id) {
+                Math3D.multiply(worldMatrixOf(parent), local)
+            } else {
+                local
+            }
+            visiting.remove(node.id)
             worldCache[node.id] = world
             return world
         }

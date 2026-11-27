@@ -41,8 +41,10 @@ class StudioRepository(private val context: Context) {
     val libraryAssetsFlow: Flow<List<LibraryAssetEntity>> = dao.observeLibraryAssets()
 
     suspend fun ensureSeeded() = withContext(Dispatchers.IO) {
-        if (dao.countLibraryAssets() == 0) {
-            dao.upsertLibraryAssets(buildBuiltInLibraryCatalog())
+        val existingIds = dao.getAllLibraryAssetIds().toHashSet()
+        val missing = buildBuiltInLibraryCatalog().filter { it.id !in existingIds }
+        if (missing.isNotEmpty()) {
+            dao.upsertLibraryAssets(missing)
         }
     }
 
@@ -230,7 +232,9 @@ class StudioRepository(private val context: Context) {
         node: SceneNode,
         assetCategory: AssetCategory,
         characterCategory: CharacterCategory,
-        costumePreset: CostumePreset = CostumePreset.ORIGINAL_HERO
+        costumePreset: CostumePreset = CostumePreset.ORIGINAL_HERO,
+        secondaryColorHex: Long = 0xFF22D3EE,
+        archetype: CharacterArchetype = CharacterArchetype.HUMANOID
     ): LibraryAssetEntity = withContext(Dispatchers.IO) {
         val assetId = UUID.randomUUID().toString()
         val nodeFile = File(assetsDir, "$assetId.json")
@@ -242,14 +246,14 @@ class StudioRepository(private val context: Context) {
             assetCategory = assetCategory.name,
             characterCategory = characterCategory.name,
             orientationTag = OrientationFilter.RIG_360.name,
-            archetype = if (node.sourceFormat != null) "IMPORTED" else CharacterArchetype.HUMANOID.name,
+            archetype = if (node.sourceFormat != null) "IMPORTED" else archetype.name,
             costumePreset = costumePreset.name,
             primaryColorHex = node.material.baseColor,
-            secondaryColorHex = 0xFF22D3EE,
+            secondaryColorHex = secondaryColorHex,
             meshCount = if (node.mesh != null) 1 else 0,
             vertexCount = node.mesh?.vertexCount ?: 0,
             boneCount = node.skeleton?.bones?.size ?: 0,
-            animationCount = 0,
+            animationCount = 16,
             isPinned = false,
             isBuiltIn = false,
             sourceFormat = node.sourceFormat ?: "Custom 3D",
@@ -428,9 +432,9 @@ class StudioRepository(private val context: Context) {
             primaryColorHex = c1,
             secondaryColorHex = c2,
             meshCount = 1,
-            vertexCount = 480,
+            vertexCount = 720,
             boneCount = bones,
-            animationCount = 10,
+            animationCount = 16,
             isPinned = pinned,
             isBuiltIn = true,
             sourceFormat = "Built-in 3D Rig",
@@ -439,12 +443,15 @@ class StudioRepository(private val context: Context) {
 
         return listOf(
             entry("char_desi_hero", "Aarav (Desi Festive)", AssetCategory.CHARACTERS, CharacterCategory.DESI, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.INDIAN_TRADITIONAL, 0xFFDC2626, 0xFFF59E0B, 11, pinned = true),
+            entry("char_cyber_bot", "Nova Cyber Bot", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.ORIGINAL_HERO, 0xFFF1F5F9, 0xFF22D3EE, 11, pinned = true),
+            entry("char_royal_knight", "Kavi Royal Knight", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.FANTASY, 0xFF94A3B8, 0xFF6366F1, 11, pinned = true),
             entry("char_desi_police", "Inspector Vikram", AssetCategory.CHARACTERS, CharacterCategory.DESI, OrientationFilter.FRONT, CharacterArchetype.HUMANOID, CostumePreset.POLICE, 0xFF926E3C, 0xFFFACC15, 11),
             entry("char_western_ranger", "Alex Explorer", AssetCategory.CHARACTERS, CharacterCategory.WESTERN, OrientationFilter.THREE_QUARTER, CharacterArchetype.HUMANOID, CostumePreset.FORMAL, 0xFF334155, 0xFF6366F1, 11, pinned = true),
             entry("char_indo_dancer", "Bima Nusantara", AssetCategory.CHARACTERS, CharacterCategory.INDONESIAN, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.MYTHOLOGICAL, 0xFFD97706, 0xFF22D3EE, 11),
             entry("char_village_farmer", "Raju Village Elder", AssetCategory.CHARACTERS, CharacterCategory.VILLAGE, OrientationFilter.SIDE, CharacterArchetype.HUMANOID, CostumePreset.VILLAGE, 0xFFB45309, 0xFFFDE68A, 11),
             entry("char_school_student", "Maya Student", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.FRONT, CharacterArchetype.HUMANOID, CostumePreset.SCHOOL_UNIFORM, 0xFF1D4ED8, 0xFFF1F5F9, 11),
             entry("char_doctor", "Dr. Sarah Medic", AssetCategory.CHARACTERS, CharacterCategory.WESTERN, OrientationFilter.THREE_QUARTER, CharacterArchetype.HUMANOID, CostumePreset.DOCTOR, 0xFFE2E8F0, 0xFF0EA5E9, 11),
+            entry("char_red_panda", "Momo Red Panda", AssetCategory.CHARACTERS, CharacterCategory.ANIMALS, OrientationFilter.RIG_360, CharacterArchetype.QUADRUPED, CostumePreset.FANTASY, 0xFFC2410C, 0xFFFFF7ED, 6),
             entry("char_bird_eagle", "Sky Eagle Rig", AssetCategory.CHARACTERS, CharacterCategory.BIRDS, OrientationFilter.RIG_360, CharacterArchetype.BIRD, CostumePreset.FANTASY, 0xFF78350F, 0xFFF59E0B, 4),
             entry("char_animal_wolf", "Timber Wolf Rig", AssetCategory.CHARACTERS, CharacterCategory.ANIMALS, OrientationFilter.SIDE, CharacterArchetype.QUADRUPED, CostumePreset.VILLAGE, 0xFF64748B, 0xFFCBD5E1, 6),
             entry("char_vehicle_jeep", "Studio Offroad Jeep", AssetCategory.VEHICLES, CharacterCategory.VEHICLES, OrientationFilter.THREE_QUARTER, CharacterArchetype.VEHICLE, CostumePreset.HISTORICAL, 0xFF059669, 0xFF1F2937, 3),

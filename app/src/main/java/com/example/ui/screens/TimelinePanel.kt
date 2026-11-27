@@ -22,10 +22,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChevronLeft
@@ -51,6 +50,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -104,12 +107,16 @@ fun BottomTimelinePanel(
     onToggleTrackVisibility: (String) -> Unit,
     onToggleTrackLock: (String) -> Unit,
     onSelectNode: (String) -> Unit,
+    onUpdateClip: (AnimationClipTrack) -> Unit,
     onDeleteClip: (String) -> Unit,
     onZoomTimeline: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val tl = scene.timeline
-    val scrollState = rememberScrollState()
+    val horizontalScrollState = rememberScrollState()
+    val verticalScrollState = rememberScrollState()
+    var selectedClipId by remember { mutableStateOf<String?>(null) }
+    val selectedClip = tl.clips.firstOrNull { it.id == selectedClipId }
     val density = LocalDensity.current
     val pxPerFrame = with(density) { (7.5f * tl.zoom).dp.toPx() }
     val trackWidthDp = ((tl.totalFrames + 12) * 7.5f * tl.zoom).dp
@@ -277,34 +284,163 @@ fun BottomTimelinePanel(
                 }
             }
 
+            // Contextual Selected Animation Clip Inspector Bar (Speed / Loop / Delete)
+            if (selectedClip != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SurfaceElevated)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = selectedClip.clipName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StudioCyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    listOf(0.5f, 1.0f, 1.5f, 2.0f).forEach { spd ->
+                        val active = kotlin.math.abs(selectedClip.speed - spd) < 0.05f
+                        Surface(
+                            onClick = { onUpdateClip(selectedClip.copy(speed = spd)) },
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (active) ElectricIndigo else SurfaceCard,
+                            border = BorderStroke(1.dp, if (active) StudioCyan else HairlineBorder)
+                        ) {
+                            Text(
+                                text = "${spd}x",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                color = TextPrimary,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Surface(
+                        onClick = { onUpdateClip(selectedClip.copy(loop = !selectedClip.loop)) },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (selectedClip.loop) StudioCyan.copy(alpha = 0.22f) else SurfaceCard,
+                        border = BorderStroke(1.dp, if (selectedClip.loop) StudioCyan else HairlineBorder)
+                    ) {
+                        Text(
+                            text = if (selectedClip.loop) "Loop" else "Once",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selectedClip.loop) StudioCyan else TextMuted,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            onDeleteClip(selectedClip.id)
+                            selectedClipId = null
+                        },
+                        modifier = Modifier.size(28.dp).testTag("timeline_delete_clip_button")
+                    ) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete clip", tint = DangerRed, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
             HorizontalDivider(color = HairlineBorder, thickness = 1.dp)
 
-            // 2. Split Left Layer Header Column + Right Scrollable Ruler & Tracks
+            val playheadX = (tl.currentFrame * pxPerFrame).roundToInt()
+
+            // 2A. Pinned Header Row: LAYERS Header + Horizontally-Synced Frame Ruler
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(152.dp)
+                    .height(26.dp)
+                    .background(CharcoalCanvas)
             ) {
-                // Left Layer Headers (Name + Visibility Eye + Lock)
-                Column(
+                Box(
                     modifier = Modifier
                         .width(126.dp)
                         .fillMaxHeight()
-                        .background(PanelNearBlack)
                         .border(0.5.dp, HairlineBorder)
+                        .padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text("LAYERS (${scene.nodes.size})", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .horizontalScroll(horizontalScrollState)
                 ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(26.dp)
-                            .background(CharcoalCanvas)
-                            .padding(horizontal = 8.dp),
-                        contentAlignment = Alignment.CenterStart
+                            .width(trackWidthDp)
+                            .fillMaxHeight()
+                            .pointerInput(tl.totalFrames, pxPerFrame) {
+                                detectTapGestures { offset ->
+                                    onScrubFrame((offset.x / pxPerFrame).coerceIn(0f, tl.totalFrames.toFloat()))
+                                }
+                            }
+                            .pointerInput(tl.totalFrames, pxPerFrame) {
+                                detectDragGestures { change, _ ->
+                                    change.consume()
+                                    onScrubFrame((change.position.x / pxPerFrame).coerceIn(0f, tl.totalFrames.toFloat()))
+                                }
+                            }
                     ) {
-                        Text("LAYERS (${scene.nodes.size})", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            for (f in 0..tl.totalFrames step 5) {
+                                val x = f * pxPerFrame
+                                val isMajor = f % 10 == 0
+                                drawLine(
+                                    color = if (isMajor) TextSecondary else HairlineBorder,
+                                    start = Offset(x, if (isMajor) 8f else 15f),
+                                    end = Offset(x, size.height),
+                                    strokeWidth = if (isMajor) 1.5f else 1f
+                                )
+                            }
+                        }
+                        for (f in 0..tl.totalFrames step 10) {
+                            Text(
+                                text = "$f",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                color = TextMuted,
+                                modifier = Modifier.offset { IntOffset((f * pxPerFrame + 3f).roundToInt(), 2) }
+                            )
+                        }
+                        // Playhead handle cap on ruler
+                        Box(
+                            modifier = Modifier
+                                .offset { IntOffset(playheadX - 6, 0) }
+                                .size(12.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(StudioCyan)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .offset { IntOffset(playheadX - 1, 0) }
+                                .width(2.dp)
+                                .fillMaxHeight()
+                                .background(StudioCyan)
+                        )
                     }
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        items(scene.nodes, key = { it.id }) { node ->
+                }
+            }
+
+            // 2B. Synchronized Vertically-Scrollable Split Layer Headers + Track Lanes
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(126.dp)
+                    .verticalScroll(verticalScrollState)
+            ) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    // Left Layer Headers (always aligned 1:1 with right tracks!)
+                    Column(
+                        modifier = Modifier
+                            .width(126.dp)
+                            .background(PanelNearBlack)
+                            .border(0.5.dp, HairlineBorder)
+                    ) {
+                        scene.nodes.forEach { node ->
                             val isSel = node.id == selectedNodeId
                             val isHidden = tl.hiddenTrackNodeIds.contains(node.id)
                             val isLocked = tl.lockedTrackNodeIds.contains(node.id)
@@ -351,93 +487,47 @@ fun BottomTimelinePanel(
                             HorizontalDivider(color = HairlineBorder.copy(alpha = 0.5f))
                         }
                     }
-                }
 
-                // Right Scrollable Frame Ruler + Tracks + Cyan Playhead Overlay
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .horizontalScroll(scrollState)
-                ) {
-                    Column(modifier = Modifier.width(trackWidthDp).fillMaxHeight()) {
-                        // Frame Ruler (tap or drag to scrub playhead)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(26.dp)
-                                .background(CharcoalCanvas)
-                                .pointerInput(tl.totalFrames, pxPerFrame) {
-                                    detectTapGestures { offset ->
-                                        onScrubFrame((offset.x / pxPerFrame).coerceIn(0f, tl.totalFrames.toFloat()))
-                                    }
-                                }
-                                .pointerInput(tl.totalFrames, pxPerFrame) {
-                                    detectDragGestures { change, _ ->
-                                        change.consume()
-                                        onScrubFrame((change.position.x / pxPerFrame).coerceIn(0f, tl.totalFrames.toFloat()))
-                                    }
-                                }
-                        ) {
-                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                for (f in 0..tl.totalFrames step 5) {
-                                    val x = f * pxPerFrame
-                                    val isMajor = f % 10 == 0
-                                    drawLine(
-                                        color = if (isMajor) TextSecondary else HairlineBorder,
-                                        start = Offset(x, if (isMajor) 8f else 15f),
-                                        end = Offset(x, size.height),
-                                        strokeWidth = if (isMajor) 1.5f else 1f
-                                    )
-                                }
-                            }
-                            for (f in 0..tl.totalFrames step 10) {
-                                Text(
-                                    text = "$f",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                                    color = TextMuted,
-                                    modifier = Modifier.offset { IntOffset((f * pxPerFrame + 3f).roundToInt(), 2) }
-                                )
-                            }
-                        }
-
-                        // Multi-Track Keyframe & Clip Lanes
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(scene.nodes, key = { it.id }) { node ->
+                    // Right Horizontally-Synced Multi-Track Lanes + Continuous Cyan Playhead Line
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(horizontalScrollState)
+                    ) {
+                        Column(modifier = Modifier.width(trackWidthDp)) {
+                            scene.nodes.forEach { node ->
                                 TimelineTrackRow(
                                     node = node,
                                     keyframes = tl.keyframes.filter { it.targetNodeId == node.id },
                                     clips = tl.clips.filter { it.targetNodeId == node.id },
                                     selectedKeyframeId = selectedKeyframeId,
+                                    selectedClipId = selectedClipId,
                                     pxPerFrame = pxPerFrame,
                                     isSelectedNode = node.id == selectedNodeId,
                                     onSelectKeyframe = { kf ->
+                                        selectedClipId = null
                                         onSelectKeyframe(kf.id)
                                         onScrubFrame(kf.frame.toFloat())
                                     },
-                                    onDeleteClip = onDeleteClip
+                                    onSelectClip = { clipId ->
+                                        onSelectKeyframe(null)
+                                        selectedClipId = if (selectedClipId == clipId) null else clipId
+                                    }
                                 )
                                 HorizontalDivider(color = HairlineBorder.copy(alpha = 0.5f))
                             }
                         }
-                    }
 
-                    // Continuous Vertical Studio Cyan Playhead Needle
-                    val playheadX = (tl.currentFrame * pxPerFrame).roundToInt()
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset(playheadX - 1, 0) }
-                            .width(2.dp)
-                            .fillMaxHeight()
-                            .background(StudioCyan)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset(playheadX - 6, 0) }
-                            .size(12.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(StudioCyan)
-                    )
+                        // Continuous Vertical Studio Cyan Playhead Needle across all tracks
+                        val contentHeightDp = (scene.nodes.size * 35).coerceAtLeast(126).dp
+                        Box(
+                            modifier = Modifier
+                                .offset { IntOffset(playheadX - 1, 0) }
+                                .width(2.dp)
+                                .height(contentHeightDp)
+                                .background(StudioCyan)
+                        )
+                    }
                 }
             }
         }
@@ -450,10 +540,11 @@ private fun TimelineTrackRow(
     keyframes: List<Keyframe>,
     clips: List<AnimationClipTrack>,
     selectedKeyframeId: String?,
+    selectedClipId: String?,
     pxPerFrame: Float,
     isSelectedNode: Boolean,
     onSelectKeyframe: (Keyframe) -> Unit,
-    onDeleteClip: (String) -> Unit
+    onSelectClip: (String) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -461,15 +552,16 @@ private fun TimelineTrackRow(
             .height(34.dp)
             .background(if (isSelectedNode) ElectricIndigo.copy(alpha = 0.08f) else Color.Transparent)
     ) {
-        // Animation Clip Blocks
+        // Animation Clip Blocks (tap to select and adjust speed/loop/delete safely)
         clips.forEach { clip ->
             val startPx = (clip.startFrame * pxPerFrame).roundToInt()
-            val widthDp = ((clip.durationFrames * pxPerFrame) / LocalDensity.current.density).dp.coerceAtLeast(48.dp)
+            val widthDp = ((clip.durationFrames * pxPerFrame) / LocalDensity.current.density).dp.coerceAtLeast(52.dp)
+            val isClipSel = clip.id == selectedClipId
             Surface(
-                onClick = { onDeleteClip(clip.id) },
+                onClick = { onSelectClip(clip.id) },
                 shape = RoundedCornerShape(6.dp),
-                color = Color(clip.colorHex).copy(alpha = 0.32f),
-                border = BorderStroke(1.dp, Color(clip.colorHex)),
+                color = Color(clip.colorHex).copy(alpha = if (isClipSel) 0.52f else 0.32f),
+                border = BorderStroke(if (isClipSel) 1.5.dp else 1.dp, if (isClipSel) StudioCyan else Color(clip.colorHex)),
                 modifier = Modifier
                     .offset { IntOffset(startPx, 4) }
                     .width(widthDp)
@@ -480,7 +572,7 @@ private fun TimelineTrackRow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = clip.clipName,
+                        text = if (kotlin.math.abs(clip.speed - 1f) > 0.05f) "${clip.clipName} (${clip.speed}x)" else clip.clipName,
                         style = MaterialTheme.typography.labelSmall,
                         color = TextPrimary,
                         maxLines = 1,

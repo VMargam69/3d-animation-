@@ -26,7 +26,13 @@ object AnimationPresets {
         AnimationPresetInfo("talking", "Talking Gesture", "Expressive", 48, 0xFFEC4899, "Animated conversational hand & head gestures"),
         AnimationPresetInfo("waving", "Friendly Wave", "Expressive", 45, 0xFF14B8A6, "Right-arm raised greeting wave"),
         AnimationPresetInfo("jumping", "Power Jump", "Action", 36, 0xFFEF4444, "Crouch anticipation, airborne arc & landing"),
-        AnimationPresetInfo("dancing", "Rhythm Dance", "Action", 48, 0xFFA855F7, "Groovy rhythmic hips, shoulders & arms")
+        AnimationPresetInfo("dancing", "Rhythm Dance", "Action", 48, 0xFFA855F7, "Groovy rhythmic hips, shoulders & arms"),
+        AnimationPresetInfo("victory", "Victory Cheer", "Expressive", 44, 0xFF22C55E, "Triumphant dual-arm fist pump & joyful hop"),
+        AnimationPresetInfo("combat", "Combat Guard", "Action", 42, 0xFFF97316, "Balanced martial stance with rhythmic bob & jab"),
+        AnimationPresetInfo("sneak", "Stealth Sneak", "Locomotion", 48, 0xFF64748B, "Crouched tiptoe prowl with low center of gravity"),
+        AnimationPresetInfo("bow", "Respectful Bow", "Expressive", 54, 0xFF06B6D4, "Graceful forward greeting bow & recovery"),
+        AnimationPresetInfo("flying", "Hover & Flight", "Action", 36, 0xFF38BDF8, "Airborne hover with smooth wing/arm beat"),
+        AnimationPresetInfo("spin", "Heroic 360 Spin", "Action", 45, 0xFFE879F9, "Dynamic 360-degree airborne flourish spin")
     )
 
     /**
@@ -153,6 +159,82 @@ object AnimationPresets {
                 "l_shin" to Vec3(abs(c) * 28f, 0f, 0f),
                 "r_thigh" to Vec3(-s * 24f - 10f, 0f, 8f),
                 "r_shin" to Vec3(abs(s) * 28f, 0f, 0f)
+            )
+            "victory" -> Vec3(0f, maxOf(0f, s2) * 0.22f, 0f) to mapOf(
+                "hips" to Vec3(-4f, s * 10f, 0f),
+                "spine" to Vec3(-10f + s2 * 6f, -s * 8f, 0f),
+                "head" to Vec3(-12f + c * 6f, s * 8f, 0f),
+                "l_upper_arm" to Vec3(-145f + s2 * 16f, 0f, -24f),
+                "l_forearm" to Vec3(-22f - abs(s) * 20f, 0f, 12f),
+                "r_upper_arm" to Vec3(-145f - s2 * 16f, 0f, 24f),
+                "r_forearm" to Vec3(-22f - abs(c) * 20f, 0f, -12f),
+                "l_thigh" to Vec3(-maxOf(0f, s2) * 18f, 0f, -6f),
+                "l_shin" to Vec3(maxOf(0f, s2) * 24f, 0f, 0f),
+                "r_thigh" to Vec3(-maxOf(0f, s2) * 18f, 0f, 6f),
+                "r_shin" to Vec3(maxOf(0f, s2) * 24f, 0f, 0f)
+            )
+            "combat" -> Vec3(0f, -0.10f + abs(s2) * 0.04f, 0f) to mapOf(
+                "hips" to Vec3(6f, -24f + s * 6f, 0f),
+                "spine" to Vec3(10f, 18f + s * 10f, 0f),
+                "head" to Vec3(-8f, 6f - s * 6f, 0f),
+                "l_upper_arm" to Vec3(-68f - maxOf(0f, s) * 26f, 16f, -22f),
+                "l_forearm" to Vec3(-74f + maxOf(0f, s) * 48f, 0f, 18f),
+                "r_upper_arm" to Vec3(-56f + maxOf(0f, -s) * 18f, -14f, 24f),
+                "r_forearm" to Vec3(-88f, 0f, -18f),
+                "l_thigh" to Vec3(-26f, -12f, -10f),
+                "l_shin" to Vec3(36f, 0f, 0f),
+                "r_thigh" to Vec3(22f, 12f, 10f),
+                "r_shin" to Vec3(28f, 0f, 0f)
+            )
+            "sneak" -> Vec3(0f, -0.18f + abs(s) * 0.04f, 0f) to mapOf(
+                "hips" to Vec3(14f, s * 8f, c * 4f),
+                "spine" to Vec3(24f, -s * 10f, 0f),
+                "head" to Vec3(-22f, c * 10f, 0f),
+                "l_upper_arm" to Vec3(-24f - s * 16f, 0f, -16f),
+                "l_forearm" to Vec3(-56f, 0f, 8f),
+                "r_upper_arm" to Vec3(-24f + s * 16f, 0f, 16f),
+                "r_forearm" to Vec3(-56f, 0f, -8f),
+                "l_thigh" to Vec3(-34f + s * 28f, 0f, -4f),
+                "l_shin" to Vec3(48f + maxOf(0f, -c) * 32f, 0f, 0f),
+                "r_thigh" to Vec3(-34f - s * 28f, 0f, 4f),
+                "r_shin" to Vec3(48f + maxOf(0f, c) * 32f, 0f, 0f)
+            )
+            "bow" -> {
+                val bend = sin(t * PI.toFloat()).coerceIn(0f, 1f)
+                Vec3(0f, -bend * 0.05f, 0f) to mapOf(
+                    "hips" to Vec3(bend * 12f, 0f, 0f),
+                    "spine" to Vec3(bend * 42f, 0f, 0f),
+                    "head" to Vec3(bend * 18f, 0f, 0f),
+                    "l_upper_arm" to Vec3(-bend * 22f, 0f, -10f - bend * 14f),
+                    "l_forearm" to Vec3(-bend * 46f, 0f, bend * 28f),
+                    "r_upper_arm" to Vec3(-bend * 22f, 0f, 10f + bend * 14f),
+                    "r_forearm" to Vec3(-bend * 46f, 0f, -bend * 28f)
+                )
+            }
+            "flying" -> Vec3(0f, 0.36f + s * 0.14f, 0f) to mapOf(
+                "hips" to Vec3(14f + c * 4f, 0f, s * 4f),
+                "spine" to Vec3(12f, 0f, 0f),
+                "head" to Vec3(-16f, 0f, 0f),
+                "l_upper_arm" to Vec3(-10f, 0f, -58f + s * 34f),
+                "l_forearm" to Vec3(-14f, 0f, -12f + c * 14f),
+                "r_upper_arm" to Vec3(-10f, 0f, 58f - s * 34f),
+                "r_forearm" to Vec3(-14f, 0f, 12f - c * 14f),
+                "l_thigh" to Vec3(18f + s * 8f, 0f, -4f),
+                "l_shin" to Vec3(26f + c * 8f, 0f, 0f),
+                "r_thigh" to Vec3(24f - s * 8f, 0f, 4f),
+                "r_shin" to Vec3(34f - c * 8f, 0f, 0f)
+            )
+            "spin" -> Vec3(0f, sin(t * PI.toFloat()) * 0.34f, 0f) to mapOf(
+                "hips" to Vec3(0f, t * 360f, 0f),
+                "spine" to Vec3(-6f, 0f, 0f),
+                "l_upper_arm" to Vec3(-22f, 0f, -74f),
+                "l_forearm" to Vec3(-20f, 0f, 0f),
+                "r_upper_arm" to Vec3(-22f, 0f, 74f),
+                "r_forearm" to Vec3(-20f, 0f, 0f),
+                "l_thigh" to Vec3(-18f, 0f, -6f),
+                "l_shin" to Vec3(28f, 0f, 0f),
+                "r_thigh" to Vec3(14f, 0f, 6f),
+                "r_shin" to Vec3(22f, 0f, 0f)
             )
             else -> Vec3.ZERO to emptyMap()
         }

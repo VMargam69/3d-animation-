@@ -26,6 +26,7 @@ out vec3 vWorldPos;
 out vec3 vWorldNormal;
 out vec2 vTexCoord;
 out vec3 vVertexColor;
+out float vLocalHeight;
 
 void main() {
     vec4 localPos = vec4(aPosition, 1.0);
@@ -47,6 +48,7 @@ void main() {
     vWorldNormal = normalize(mat3(uModel) * localNorm);
     vTexCoord = aTexCoord;
     vVertexColor = aColor;
+    vLocalHeight = localPos.y;
     gl_Position = uProjection * uView * worldPos;
 }
 """
@@ -58,6 +60,7 @@ in vec3 vWorldPos;
 in vec3 vWorldNormal;
 in vec2 vTexCoord;
 in vec3 vVertexColor;
+in float vLocalHeight;
 
 uniform vec3 uCameraPos;
 uniform vec3 uBaseColor;
@@ -81,6 +84,15 @@ uniform int uLightType[4]; // 0 = Point, 1 = Directional, 2 = Spot
 
 out vec4 fragColor;
 
+vec3 acesToneMap(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
     if (!gl_FrontFacing) N = -N;
@@ -88,28 +100,35 @@ void main() {
 
     vec3 albedo = (uUseVertexColors == 1) ? vVertexColor : uBaseColor;
     if (uShadingMode == 0) {
-        // Blender-style crisp studio clay tint preserving subtle part color cues
-        albedo = mix(vec3(0.68, 0.72, 0.80), albedo, 0.42);
+        // Blender-style studio clay matcap preserving subtle character part color separation
+        albedo = mix(vec3(0.70, 0.74, 0.82), albedo, 0.38);
     } else if (uHasTexture == 1) {
         vec4 texSample = texture(uTexture, vTexCoord * uUvScale);
         albedo = texSample.rgb * albedo;
     }
 
-    // Hemisphere studio ambient
-    float hemi = N.y * 0.5 + 0.5;
-    vec3 ambient = mix(vec3(0.08, 0.10, 0.16), vec3(0.24, 0.27, 0.36), hemi) * albedo;
+    // Subtle ground contact ambient occlusion so characters sit grounded on the stage
+    float groundAo = mix(0.74, 1.0, smoothstep(0.0, 0.42, max(vLocalHeight, 0.0)));
 
-    vec3 lit = ambient;
-    float shininess = mix(128.0, 8.0, clamp(uRoughness, 0.05, 1.0));
-    vec3 specTint = mix(vec3(0.25), albedo, clamp(uMetallic, 0.0, 1.0));
+    // Studio three-tone hemisphere ambient (sky bounce + warm horizon + deep charcoal floor)
+    float hemi = N.y * 0.5 + 0.5;
+    vec3 skyBounce = mix(vec3(0.10, 0.12, 0.19), vec3(0.30, 0.34, 0.44), hemi);
+    vec3 lit = skyBounce * albedo * groundAo;
+
+    float rough = clamp(uRoughness, 0.06, 1.0);
+    float metal = clamp(uMetallic, 0.0, 1.0);
+    float shininess = mix(140.0, 10.0, rough);
+    vec3 specTint = mix(vec3(0.28), albedo, metal);
 
     int count = clamp(uLightCount, 0, 4);
     if (count == 0) {
-        vec3 L = normalize(vec3(0.45, 0.82, 0.55));
+        vec3 L = normalize(vec3(0.45, 0.82, 0.58));
         float ndl = max(dot(N, L), 0.0);
+        // Soft wrap diffuse for organic stylized character shading
+        float wrap = max((dot(N, L) + 0.22) / 1.22, 0.0);
         vec3 H = normalize(L + V);
-        float spec = pow(max(dot(N, H), 0.0), shininess) * (1.0 - uRoughness * 0.75);
-        lit += albedo * ndl * 0.95 + specTint * spec * 0.65;
+        float spec = pow(max(dot(N, H), 0.0), shininess) * (1.0 - rough * 0.72);
+        lit += albedo * mix(ndl, wrap, 0.35) * 0.96 + specTint * spec * 0.65;
     } else {
         for (int i = 0; i < count; i++) {
             vec3 L;
@@ -120,34 +139,36 @@ void main() {
                 vec3 toL = uLightPos[i] - vWorldPos;
                 float dist = length(toL);
                 L = toL / max(dist, 0.001);
-                atten = 1.0 / (1.0 + 0.045 * dist + 0.0075 * dist * dist);
+                atten = 1.0 / (1.0 + 0.038 * dist + 0.006 * dist * dist);
                 if (uLightType[i] == 2) {
                     vec3 spotDir = normalize(-uLightPos[i]);
                     float cosAng = dot(-L, spotDir);
                     atten *= smoothstep(0.62, 0.90, cosAng);
                 }
             }
-            float ndl = max(dot(N, L), 0.0);
+            float rawDot = dot(N, L);
+            float ndl = max(rawDot, 0.0);
+            float wrap = max((rawDot + 0.20) / 1.20, 0.0);
             vec3 H = normalize(L + V);
-            float spec = pow(max(dot(N, H), 0.0), shininess) * (1.0 - uRoughness * 0.7);
-            vec3 diffuse = albedo * (1.0 - uMetallic * 0.55) * ndl;
-            lit += (diffuse + specTint * spec) * uLightColor[i] * uLightIntensity[i] * atten;
+            float spec = pow(max(dot(N, H), 0.0), shininess) * (1.0 - rough * 0.68);
+            vec3 diffuse = albedo * (1.0 - metal * 0.52) * mix(ndl, wrap, 0.30);
+            lit += (diffuse + specTint * spec) * uLightColor[i] * uLightIntensity[i] * atten * groundAo;
         }
     }
 
-    // Subtle studio rim + emission
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+    // Crisp studio Fresnel rim + emissive accent
+    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 2.8);
     lit += uEmissionColor * uEmissionStrength;
 
     if (uIsSelected == 1) {
-        lit += vec3(0.13, 0.83, 0.93) * fresnel * 0.75;
+        lit += vec3(0.13, 0.83, 0.93) * fresnel * 0.68;
     } else {
-        lit += vec3(0.39, 0.40, 0.95) * fresnel * 0.08;
+        lit += vec3(0.39, 0.44, 0.96) * fresnel * 0.12;
     }
 
-    // Filmic-ish soft tone clamp
-    lit = lit / (lit + vec3(0.85)) * 1.45;
-    fragColor = vec4(clamp(lit, 0.0, 1.0), clamp(uOpacity, 0.1, 1.0));
+    // ACES filmic tone mapping for vivid highlights & clean darks
+    vec3 mapped = acesToneMap(lit * 1.12);
+    fragColor = vec4(mapped, clamp(uOpacity, 0.1, 1.0));
 }
 """
 

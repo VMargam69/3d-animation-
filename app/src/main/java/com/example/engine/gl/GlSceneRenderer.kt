@@ -21,12 +21,10 @@ import com.example.engine.model.SkeletonData
 import com.example.engine.model.TransformAxis
 import com.example.engine.model.TransformTool
 import com.example.engine.model.Vec3
-import com.example.engine.model.ViewportCameraState
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.nio.IntBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
@@ -46,6 +44,27 @@ data class RenderConfig(
     val showGizmo: Boolean = true
 )
 
+private class GpuMeshHandle(
+    val version: Long,
+    val vertexCount: Int,
+    val indexCount: Int,
+    val vaoId: Int,
+    val vboIds: IntArray, // 0=pos,1=norm,2=uv,3=jIdx,4=jWgt,5=col,6=ibo
+    var lastUsedFrame: Long
+) {
+    fun release() {
+        GLES30.glDeleteBuffers(vboIds.size, vboIds, 0)
+        GLES30.glDeleteVertexArrays(1, intArrayOf(vaoId), 0)
+    }
+}
+
+/**
+ * High-performance OpenGL ES 3.0 Scene Renderer featuring:
+ * - Persistent VAO + VBO + IBO GPU mesh caching (zero per-frame DirectBuffer allocations for meshes)
+ * - Cached shader uniform locations
+ * - Static GPU VAO for floor grid & world axes
+ * - Single reusable dynamic FloatBuffer for skeleton/gizmo/wireframe overlays
+ */
 class GlSceneRenderer : GLSurfaceView.Renderer {
 
     @Volatile
@@ -55,23 +74,98 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
     private var lineProgram = 0
     private var viewportW = 1
     private var viewportH = 1
+    private var frameCounter = 0L
+
+    // Cached uniform locations for meshProgram
+    private var uModel = -1
+    private var uView = -1
+    private var uProjection = -1
+    private var uCameraPos = -1
+    private var uBaseColor = -1
+    private var uRoughness = -1
+    private var uMetallic = -1
+    private var uOpacity = -1
+    private var uEmissionColor = -1
+    private var uEmissionStrength = -1
+    private var uUvScale = -1
+    private var uHasTexture = -1
+    private var uTexture = -1
+    private var uShadingMode = -1
+    private var uIsSelected = -1
+    private var uUseVertexColors = -1
+    private var uUseSkinning = -1
+    private var uBoneMatrices = -1
+    private var uLightCount = -1
+    private var uLightPos = -1
+    private var uLightColor = -1
+    private var uLightIntensity = -1
+    private var uLightType = -1
+
+    // Cached uniform locations for lineProgram
+    private var uLineViewProj = -1
+    private var uLinePointSize = -1
+
+    // Persistent GPU VAO/VBO caches
+    private val gpuMeshCache = HashMap<String, GpuMeshHandle>()
+    private val textureCache = HashMap<String, Int>()
+    private var gridVao = 0
+    private var gridVbo = 0
+    private var gridVertexCount = 0
+
+    // Reusable dynamic buffer & scratch arrays to prevent GC churn during 60fps playback
+    private var dynamicLineVbo = 0
+    private var dynamicLineBuffer: FloatBuffer = allocateDirectFloatBuffer(4096)
+    private val lightPosArr = FloatArray(12)
+    private val lightColorArr = FloatArray(12)
+    private val lightIntArr = FloatArray(4)
+    private val lightTypeArr = IntArray(4)
+    private val tempViewMat = FloatArray(16)
+    private val tempProjMat = FloatArray(16)
+    private val tempViewProj = FloatArray(16)
 
     private val lastViewMatrix = Math3D.identity()
     private val lastProjMatrix = Math3D.identity()
 
-    private val gridLineBuffer: FloatBuffer by lazy { buildGridAndAxesBuffer() }
-    private var gridVertexCount = 0
-
-    // Cached GPU textures mapped by file path
-    private val textureCache = HashMap<String, Int>()
-
-    // Reusable direct buffers for dynamic lines/gizmos
     private var initialized = false
 
     fun initGl() {
         if (initialized) return
         meshProgram = ShaderLibrary.compileProgram(ShaderLibrary.MESH_VERTEX_SHADER, ShaderLibrary.MESH_FRAGMENT_SHADER)
         lineProgram = ShaderLibrary.compileProgram(ShaderLibrary.LINE_VERTEX_SHADER, ShaderLibrary.LINE_FRAGMENT_SHADER)
+
+        // Cache all uniform locations once
+        uModel = GLES30.glGetUniformLocation(meshProgram, "uModel")
+        uView = GLES30.glGetUniformLocation(meshProgram, "uView")
+        uProjection = GLES30.glGetUniformLocation(meshProgram, "uProjection")
+        uCameraPos = GLES30.glGetUniformLocation(meshProgram, "uCameraPos")
+        uBaseColor = GLES30.glGetUniformLocation(meshProgram, "uBaseColor")
+        uRoughness = GLES30.glGetUniformLocation(meshProgram, "uRoughness")
+        uMetallic = GLES30.glGetUniformLocation(meshProgram, "uMetallic")
+        uOpacity = GLES30.glGetUniformLocation(meshProgram, "uOpacity")
+        uEmissionColor = GLES30.glGetUniformLocation(meshProgram, "uEmissionColor")
+        uEmissionStrength = GLES30.glGetUniformLocation(meshProgram, "uEmissionStrength")
+        uUvScale = GLES30.glGetUniformLocation(meshProgram, "uUvScale")
+        uHasTexture = GLES30.glGetUniformLocation(meshProgram, "uHasTexture")
+        uTexture = GLES30.glGetUniformLocation(meshProgram, "uTexture")
+        uShadingMode = GLES30.glGetUniformLocation(meshProgram, "uShadingMode")
+        uIsSelected = GLES30.glGetUniformLocation(meshProgram, "uIsSelected")
+        uUseVertexColors = GLES30.glGetUniformLocation(meshProgram, "uUseVertexColors")
+        uUseSkinning = GLES30.glGetUniformLocation(meshProgram, "uUseSkinning")
+        uBoneMatrices = GLES30.glGetUniformLocation(meshProgram, "uBoneMatrices")
+        uLightCount = GLES30.glGetUniformLocation(meshProgram, "uLightCount")
+        uLightPos = GLES30.glGetUniformLocation(meshProgram, "uLightPos")
+        uLightColor = GLES30.glGetUniformLocation(meshProgram, "uLightColor")
+        uLightIntensity = GLES30.glGetUniformLocation(meshProgram, "uLightIntensity")
+        uLightType = GLES30.glGetUniformLocation(meshProgram, "uLightType")
+
+        uLineViewProj = GLES30.glGetUniformLocation(lineProgram, "uViewProj")
+        uLinePointSize = GLES30.glGetUniformLocation(lineProgram, "uPointSize")
+
+        initStaticGridVao()
+        val dynBuf = IntArray(1)
+        GLES30.glGenBuffers(1, dynBuf, 0)
+        dynamicLineVbo = dynBuf[0]
+
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LEQUAL)
         GLES30.glEnable(GLES30.GL_BLEND)
@@ -81,6 +175,11 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
 
     fun releaseGl() {
         if (!initialized) return
+        gpuMeshCache.values.forEach { it.release() }
+        gpuMeshCache.clear()
+        if (gridVbo != 0) GLES30.glDeleteBuffers(1, intArrayOf(gridVbo), 0)
+        if (gridVao != 0) GLES30.glDeleteVertexArrays(1, intArrayOf(gridVao), 0)
+        if (dynamicLineVbo != 0) GLES30.glDeleteBuffers(1, intArrayOf(dynamicLineVbo), 0)
         if (meshProgram != 0) GLES30.glDeleteProgram(meshProgram)
         if (lineProgram != 0) GLES30.glDeleteProgram(lineProgram)
         if (textureCache.isNotEmpty()) {
@@ -88,14 +187,24 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(ids.size, ids, 0)
             textureCache.clear()
         }
+        gridVao = 0
+        gridVbo = 0
+        dynamicLineVbo = 0
         meshProgram = 0
         lineProgram = 0
         initialized = false
     }
 
     override fun onSurfaceCreated(gl: GL10?, eglConfig: EGLConfig?) {
-        initialized = false
+        // EGL context was recreated; drop stale GL handles without calling delete on old context
+        gpuMeshCache.clear()
         textureCache.clear()
+        gridVao = 0
+        gridVbo = 0
+        dynamicLineVbo = 0
+        meshProgram = 0
+        lineProgram = 0
+        initialized = false
         initGl()
     }
 
@@ -128,61 +237,70 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         forExport: Boolean
     ) {
         if (!initialized) initGl()
+        frameCounter++
+
         GLES30.glViewport(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
         GLES30.glClearColor(0.055f, 0.063f, 0.086f, 1.0f) // #0E1015 dark charcoal
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
         val aspect = width.toFloat() / height.coerceAtLeast(1).toFloat()
-        val (camPos, viewMat, projMat) = computeCameraMatrices(cfg.scene, evaluated, aspect, forExport)
-        System.arraycopy(viewMat, 0, lastViewMatrix, 0, 16)
-        System.arraycopy(projMat, 0, lastProjMatrix, 0, 16)
-        val viewProj = Math3D.multiply(projMat, viewMat)
+        val camPos = computeCameraMatricesInto(cfg.scene, evaluated, aspect, forExport, tempViewMat, tempProjMat)
+        System.arraycopy(tempViewMat, 0, lastViewMatrix, 0, 16)
+        System.arraycopy(tempProjMat, 0, lastProjMatrix, 0, 16)
+        Matrix.multiplyMM(tempViewProj, 0, tempProjMat, 0, tempViewMat, 0)
 
-        // 1. Floor Grid & World XYZ Axes (omitted during final video export unless requested)
-        if (cfg.showGrid && !forExport) {
-            drawColoredLines(gridLineBuffer, gridVertexCount, viewProj, GLES30.GL_LINES, 1.5f)
+        // 1. Floor Grid & World XYZ Axes (static GPU VAO, zero allocation)
+        if (cfg.showGrid && !forExport && gridVao != 0) {
+            GLES30.glUseProgram(lineProgram)
+            GLES30.glUniformMatrix4fv(uLineViewProj, 1, false, tempViewProj, 0)
+            GLES30.glUniform1f(uLinePointSize, 1.5f)
+            GLES30.glLineWidth(1.5f)
+            GLES30.glBindVertexArray(gridVao)
+            GLES30.glDrawArrays(GLES30.GL_LINES, 0, gridVertexCount)
+            GLES30.glBindVertexArray(0)
         }
 
-        // 2. Collect visible lights (up to 4)
-        val lightNodes = cfg.scene.nodes.filter {
-            it.nodeType == NodeType.LIGHT && (evaluated.nodeStates[it.id]?.visible == true)
-        }.take(4)
-
-        val lightPosArr = FloatArray(12)
-        val lightColorArr = FloatArray(12)
-        val lightIntArr = FloatArray(4)
-        val lightTypeArr = IntArray(4)
-        lightNodes.forEachIndexed { i, ln ->
+        // 2. Collect visible lights (up to 4) into pre-allocated scratch arrays
+        var lightCount = 0
+        for (ln in cfg.scene.nodes) {
+            if (lightCount >= 4) break
+            if (ln.nodeType != NodeType.LIGHT) continue
             val st = evaluated.nodeStates[ln.id]
-            val p = st?.transform?.position ?: ln.transform.position
-            lightPosArr[i * 3] = p.x; lightPosArr[i * 3 + 1] = p.y; lightPosArr[i * 3 + 2] = p.z
-            val rgb = Math3D.colorHexToRgbFloats(ln.light?.color ?: 0xFFFFFFFF)
-            lightColorArr[i * 3] = rgb[0]; lightColorArr[i * 3 + 1] = rgb[1]; lightColorArr[i * 3 + 2] = rgb[2]
-            lightIntArr[i] = ln.light?.intensity ?: 1.4f
-            lightTypeArr[i] = when (ln.light?.lightType ?: LightType.POINT) {
+            if (st?.visible != true) continue
+            val p = st.transform.position
+            lightPosArr[lightCount * 3] = p.x
+            lightPosArr[lightCount * 3 + 1] = p.y
+            lightPosArr[lightCount * 3 + 2] = p.z
+            val colHex = ln.light?.color ?: 0xFFFFFFFF
+            lightColorArr[lightCount * 3] = ((colHex shr 16) and 0xFF) / 255f
+            lightColorArr[lightCount * 3 + 1] = ((colHex shr 8) and 0xFF) / 255f
+            lightColorArr[lightCount * 3 + 2] = (colHex and 0xFF) / 255f
+            lightIntArr[lightCount] = ln.light?.intensity ?: 1.4f
+            lightTypeArr[lightCount] = when (ln.light?.lightType ?: LightType.POINT) {
                 LightType.POINT -> 0
                 LightType.DIRECTIONAL -> 1
                 LightType.SPOT -> 2
             }
+            lightCount++
         }
 
-        // 3. Draw 3D Meshes & Skinned Characters
+        // 3. Draw 3D Meshes & Skinned Characters using cached GPU VAOs
         GLES30.glUseProgram(meshProgram)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(meshProgram, "uView"), 1, false, viewMat, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(meshProgram, "uProjection"), 1, false, projMat, 0)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(meshProgram, "uCameraPos"), camPos.x, camPos.y, camPos.z)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uLightCount"), lightNodes.size)
-        GLES30.glUniform3fv(GLES30.glGetUniformLocation(meshProgram, "uLightPos"), 4, lightPosArr, 0)
-        GLES30.glUniform3fv(GLES30.glGetUniformLocation(meshProgram, "uLightColor"), 4, lightColorArr, 0)
-        GLES30.glUniform1fv(GLES30.glGetUniformLocation(meshProgram, "uLightIntensity"), 4, lightIntArr, 0)
-        GLES30.glUniform1iv(GLES30.glGetUniformLocation(meshProgram, "uLightType"), 4, lightTypeArr, 0)
+        GLES30.glUniformMatrix4fv(uView, 1, false, tempViewMat, 0)
+        GLES30.glUniformMatrix4fv(uProjection, 1, false, tempProjMat, 0)
+        GLES30.glUniform3f(uCameraPos, camPos.x, camPos.y, camPos.z)
+        GLES30.glUniform1i(uLightCount, lightCount)
+        GLES30.glUniform3fv(uLightPos, 4, lightPosArr, 0)
+        GLES30.glUniform3fv(uLightColor, 4, lightColorArr, 0)
+        GLES30.glUniform1fv(uLightIntensity, 4, lightIntArr, 0)
+        GLES30.glUniform1iv(uLightType, 4, lightTypeArr, 0)
 
         val shadingInt = when (if (forExport) ShadingMode.MATERIAL else cfg.shadingMode) {
             ShadingMode.SOLID -> 0
             ShadingMode.MATERIAL -> 1
             ShadingMode.WIREFRAME -> 2
         }
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uShadingMode"), shadingInt)
+        GLES30.glUniform1i(uShadingMode, shadingInt)
 
         for (node in cfg.scene.nodes) {
             val state = evaluated.nodeStates[node.id] ?: continue
@@ -193,7 +311,8 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             val isSelected = !forExport && node.id == cfg.selectedNodeId
 
             if (shadingInt != 2) {
-                drawMeshSolid(
+                drawMeshSolidCached(
+                    cacheKey = node.id,
                     mesh = mesh,
                     worldMatrix = state.worldMatrix,
                     material = node.material,
@@ -203,14 +322,13 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                 )
             }
 
-            // Wireframe overlay for Wireframe mode or Edit Mode selected mesh
             if (shadingInt == 2 || (!forExport && isSelected && cfg.editorMode == EditorMode.EDIT)) {
                 drawMeshWireframeOverlay(
                     mesh = mesh,
                     worldMatrix = state.worldMatrix,
                     skeleton = node.skeleton,
                     bonePose = state.boneRotations,
-                    viewProj = viewProj,
+                    viewProj = tempViewProj,
                     isEditMode = !forExport && isSelected && cfg.editorMode == EditorMode.EDIT,
                     editSubMode = cfg.editSubMode,
                     selectedElementIndex = cfg.selectedElementIndex
@@ -218,11 +336,23 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        if (!forExport) {
-            // 4. Draw Light & Camera Viewport Markers
-            drawHelpersForLightsAndCameras(cfg.scene, evaluated, cfg.selectedNodeId, viewProj)
+        // Periodically prune GPU VAOs for deleted nodes (every 120 frames)
+        if (frameCounter % 120L == 0L && gpuMeshCache.size > 24) {
+            val it = gpuMeshCache.entries.iterator()
+            while (it.hasNext()) {
+                val entry = it.next()
+                if (frameCounter - entry.value.lastUsedFrame > 120L) {
+                    entry.value.release()
+                    it.remove()
+                }
+            }
+        }
 
-            // 5. Draw Skeleton Armatures (always in Pose mode, or when showSkeleton enabled)
+        if (!forExport) {
+            // 4. Light & Camera Viewport Markers
+            drawHelpersForLightsAndCameras(cfg.scene, evaluated, cfg.selectedNodeId, tempViewProj)
+
+            // 5. Skeleton Armatures
             if (cfg.showSkeleton || cfg.editorMode == EditorMode.POSE) {
                 GLES30.glDisable(GLES30.GL_DEPTH_TEST)
                 for (node in cfg.scene.nodes) {
@@ -230,17 +360,17 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                     val state = evaluated.nodeStates[node.id] ?: continue
                     if (!state.visible) continue
                     val highlightAll = node.id == cfg.selectedNodeId
-                    drawSkeletonOverlay(skel, state.worldMatrix, state.boneRotations, cfg.selectedBoneId, highlightAll, viewProj)
+                    drawSkeletonOverlay(skel, state.worldMatrix, state.boneRotations, cfg.selectedBoneId, highlightAll, tempViewProj)
                 }
                 GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             }
 
-            // 6. Draw 3D Transform Gizmo on selected object
+            // 6. 3D Transform Gizmo on selected object
             if (cfg.showGizmo && cfg.selectedNodeId != null && cfg.editorMode == EditorMode.OBJECT) {
                 val selState = evaluated.nodeStates[cfg.selectedNodeId]
                 if (selState != null && selState.visible) {
                     GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-                    drawTransformGizmo(selState.transform.position, cfg.transformAxis, viewProj)
+                    drawTransformGizmo(selState.transform.position, cfg.transformAxis, tempViewProj)
                     GLES30.glEnable(GLES30.GL_DEPTH_TEST)
                 }
             }
@@ -255,7 +385,6 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         val evaluated = AnimationEvaluator.evaluate(cfg.scene, cfg.scene.timeline.currentFrame)
         val ray = Math3D.unprojectRay(touchX, touchY, viewportW, viewportH, lastViewMatrix, lastProjMatrix)
 
-        // In Pose mode, prioritize picking bones on selected rigged character
         if (cfg.editorMode == EditorMode.POSE && cfg.selectedNodeId != null) {
             val node = cfg.scene.nodes.firstOrNull { it.id == cfg.selectedNodeId }
             val skel = node?.skeleton
@@ -300,26 +429,24 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         return bestNodeId to null
     }
 
-    private fun computeCameraMatrices(
+    private fun computeCameraMatricesInto(
         scene: SceneDocument,
         evaluated: EvaluatedScene,
         aspect: Float,
-        forExport: Boolean
-    ): Triple<Vec3, FloatArray, FloatArray> {
+        forExport: Boolean,
+        viewMat: FloatArray,
+        projMat: FloatArray
+    ): Vec3 {
         val cam = scene.viewportCamera
-        val viewMat = Math3D.identity()
-        val projMat = Math3D.identity()
-
         val activeSceneCam = scene.nodes.firstOrNull { it.nodeType == NodeType.CAMERA && (it.camera?.isActive == true) }
         if ((cam.preset == CameraPreset.CAMERA_VIEW || forExport) && activeSceneCam != null) {
             val camState = evaluated.nodeStates[activeSceneCam.id]
             val pos = camState?.transform?.position ?: activeSceneCam.transform.position
             val fov = (camState?.cameraFov ?: activeSceneCam.camera?.fov ?: 45f).coerceIn(18f, 105f)
-            // Look at scene target or forward vector
             val target = cam.target
             Matrix.setLookAtM(viewMat, 0, pos.x, pos.y, pos.z, target.x, target.y, target.z, 0f, 1f, 0f)
             Matrix.perspectiveM(projMat, 0, fov, aspect, 0.1f, 150f)
-            return Triple(pos, viewMat, projMat)
+            return pos
         }
 
         val (yaw, pitch) = when (cam.preset) {
@@ -341,10 +468,70 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         } else {
             Matrix.perspectiveM(projMat, 0, 45f, aspect, 0.1f, 150f)
         }
-        return Triple(eye, viewMat, projMat)
+        return eye
     }
 
-    private fun drawMeshSolid(
+    private fun getOrUploadGpuMesh(cacheKey: String, mesh: MeshData): GpuMeshHandle {
+        val existing = gpuMeshCache[cacheKey]
+        if (existing != null &&
+            existing.version == mesh.version &&
+            existing.vertexCount == mesh.vertexCount &&
+            existing.indexCount == mesh.indices.size
+        ) {
+            existing.lastUsedFrame = frameCounter
+            return existing
+        }
+        existing?.release()
+
+        val vaoArr = IntArray(1)
+        GLES30.glGenVertexArrays(1, vaoArr, 0)
+        val vao = vaoArr[0]
+        val vbos = IntArray(7)
+        GLES30.glGenBuffers(7, vbos, 0)
+
+        GLES30.glBindVertexArray(vao)
+
+        fun uploadFloatAttr(vbo: Int, loc: Int, comps: Int, data: FloatArray) {
+            val buf = allocateDirectFloatBuffer(data.size).apply { put(data); position(0) }
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
+            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, buf, GLES30.GL_STATIC_DRAW)
+            GLES30.glEnableVertexAttribArray(loc)
+            GLES30.glVertexAttribPointer(loc, comps, GLES30.GL_FLOAT, false, 0, 0)
+        }
+
+        uploadFloatAttr(vbos[0], 0, 3, mesh.vertices)
+        uploadFloatAttr(vbos[1], 1, 3, mesh.normals)
+        uploadFloatAttr(vbos[2], 2, 2, mesh.uvs)
+        val jIdxFloats = FloatArray(mesh.jointIndices.size) { mesh.jointIndices[it].toFloat() }
+        uploadFloatAttr(vbos[3], 3, 4, jIdxFloats)
+        uploadFloatAttr(vbos[4], 4, 4, mesh.jointWeights)
+        val cArr = if (mesh.colors.size == mesh.vertices.size) mesh.colors else FloatArray(mesh.vertices.size) { 1f }
+        uploadFloatAttr(vbos[5], 5, 3, cArr)
+
+        val iBuf = ByteBuffer.allocateDirect(mesh.indices.size * 4).order(ByteOrder.nativeOrder()).asIntBuffer().apply {
+            put(mesh.indices)
+            position(0)
+        }
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, vbos[6])
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, mesh.indices.size * 4, iBuf, GLES30.GL_STATIC_DRAW)
+
+        GLES30.glBindVertexArray(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+
+        val handle = GpuMeshHandle(
+            version = mesh.version,
+            vertexCount = mesh.vertexCount,
+            indexCount = mesh.indices.size,
+            vaoId = vao,
+            vboIds = vbos,
+            lastUsedFrame = frameCounter
+        )
+        gpuMeshCache[cacheKey] = handle
+        return handle
+    }
+
+    private fun drawMeshSolidCached(
+        cacheKey: String,
         mesh: MeshData,
         worldMatrix: FloatArray,
         material: com.example.engine.model.MaterialData,
@@ -353,73 +540,51 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         isSelected: Boolean
     ) {
         GLES30.glUseProgram(meshProgram)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(meshProgram, "uModel"), 1, false, worldMatrix, 0)
+        GLES30.glUniformMatrix4fv(uModel, 1, false, worldMatrix, 0)
 
-        val rgb = Math3D.colorHexToRgbFloats(material.baseColor)
-        val emRgb = Math3D.colorHexToRgbFloats(material.emissionColor)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(meshProgram, "uBaseColor"), rgb[0], rgb[1], rgb[2])
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(meshProgram, "uRoughness"), material.roughness)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(meshProgram, "uMetallic"), material.metallic)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(meshProgram, "uOpacity"), material.opacity)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(meshProgram, "uEmissionColor"), emRgb[0], emRgb[1], emRgb[2])
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(meshProgram, "uEmissionStrength"), material.emissionStrength)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(meshProgram, "uUvScale"), material.uvScale)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uIsSelected"), if (isSelected) 1 else 0)
+        val baseHex = material.baseColor
+        val emHex = material.emissionColor
+        GLES30.glUniform3f(
+            uBaseColor,
+            ((baseHex shr 16) and 0xFF) / 255f,
+            ((baseHex shr 8) and 0xFF) / 255f,
+            (baseHex and 0xFF) / 255f
+        )
+        GLES30.glUniform1f(uRoughness, material.roughness)
+        GLES30.glUniform1f(uMetallic, material.metallic)
+        GLES30.glUniform1f(uOpacity, material.opacity)
+        GLES30.glUniform3f(
+            uEmissionColor,
+            ((emHex shr 16) and 0xFF) / 255f,
+            ((emHex shr 8) and 0xFF) / 255f,
+            (emHex and 0xFF) / 255f
+        )
+        GLES30.glUniform1f(uEmissionStrength, material.emissionStrength)
+        GLES30.glUniform1f(uUvScale, material.uvScale)
+        GLES30.glUniform1i(uIsSelected, if (isSelected) 1 else 0)
+        GLES30.glUniform1i(uUseVertexColors, if (mesh.useVertexColors) 1 else 0)
 
         val texId = material.texturePath?.let { getOrLoadTexture(it) } ?: 0
         if (texId != 0) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uTexture"), 0)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uHasTexture"), 1)
+            GLES30.glUniform1i(uTexture, 0)
+            GLES30.glUniform1i(uHasTexture, 1)
         } else {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uHasTexture"), 0)
+            GLES30.glUniform1i(uHasTexture, 0)
         }
 
         val useSkinning = skeleton != null && skeleton.bones.isNotEmpty()
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(meshProgram, "uUseSkinning"), if (useSkinning) 1 else 0)
+        GLES30.glUniform1i(uUseSkinning, if (useSkinning) 1 else 0)
         if (useSkinning) {
             val palette = skeleton!!.computeSkinningPalette(bonePose)
-            GLES30.glUniformMatrix4fv(
-                GLES30.glGetUniformLocation(meshProgram, "uBoneMatrices"),
-                SkeletonData.MAX_BONES,
-                false,
-                palette,
-                0
-            )
+            GLES30.glUniformMatrix4fv(uBoneMatrices, SkeletonData.MAX_BONES, false, palette, 0)
         }
 
-        val vBuf = toFloatBuffer(mesh.vertices)
-        val nBuf = toFloatBuffer(mesh.normals)
-        val uvBuf = toFloatBuffer(mesh.uvs)
-        val jIdxFloats = FloatArray(mesh.jointIndices.size) { mesh.jointIndices[it].toFloat() }
-        val jIdxBuf = toFloatBuffer(jIdxFloats)
-        val jWgtBuf = toFloatBuffer(mesh.jointWeights)
-        val cArr = if (mesh.colors.size == mesh.vertices.size) mesh.colors else FloatArray(mesh.vertices.size) { 1f }
-        val cBuf = toFloatBuffer(cArr)
-        val iBuf = toIntBuffer(mesh.indices)
-
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(meshProgram, "uUseVertexColors"),
-            if (mesh.useVertexColors) 1 else 0
-        )
-
-        GLES30.glEnableVertexAttribArray(0)
-        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 0, vBuf)
-        GLES30.glEnableVertexAttribArray(1)
-        GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, 0, nBuf)
-        GLES30.glEnableVertexAttribArray(2)
-        GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, 0, uvBuf)
-        GLES30.glEnableVertexAttribArray(3)
-        GLES30.glVertexAttribPointer(3, 4, GLES30.GL_FLOAT, false, 0, jIdxBuf)
-        GLES30.glEnableVertexAttribArray(4)
-        GLES30.glVertexAttribPointer(4, 4, GLES30.GL_FLOAT, false, 0, jWgtBuf)
-        GLES30.glEnableVertexAttribArray(5)
-        GLES30.glVertexAttribPointer(5, 3, GLES30.GL_FLOAT, false, 0, cBuf)
-
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.indices.size, GLES30.GL_UNSIGNED_INT, iBuf)
-
-        for (loc in 0..5) GLES30.glDisableVertexAttribArray(loc)
+        val gpuMesh = getOrUploadGpuMesh(cacheKey, mesh)
+        GLES30.glBindVertexArray(gpuMesh.vaoId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, gpuMesh.indexCount, GLES30.GL_UNSIGNED_INT, 0)
+        GLES30.glBindVertexArray(0)
     }
 
     private fun drawMeshWireframeOverlay(
@@ -436,19 +601,20 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             skeleton.computeSkinningPalette(bonePose)
         } else null
 
+        val matSlice = FloatArray(16)
         val worldVerts = Array(mesh.vertexCount) { i ->
             var p = Vec3(mesh.vertices[i * 3], mesh.vertices[i * 3 + 1], mesh.vertices[i * 3 + 2])
             if (skinPalette != null) {
                 val b0 = mesh.jointIndices[i * 4].coerceIn(0, SkeletonData.MAX_BONES - 1)
-                val mat = skinPalette.copyOfRange(b0 * 16, b0 * 16 + 16)
-                p = Math3D.transformPoint(mat, p)
+                System.arraycopy(skinPalette, b0 * 16, matSlice, 0, 16)
+                p = Math3D.transformPoint(matSlice, p)
             }
             Math3D.transformPoint(worldMatrix, p)
         }
 
         val maxTris = mesh.triangleCount.coerceAtMost(2400)
-        val lineData = FloatArray(maxTris * 6 * 7) // 3 edges * 2 pts * (xyz + rgba)
-        var ptr = 0
+        val floatCount = maxTris * 6 * 7
+        val buf = ensureDynamicBuffer(floatCount)
         for (t in 0 until maxTris) {
             val i0 = mesh.indices[t * 3]; val i1 = mesh.indices[t * 3 + 1]; val i2 = mesh.indices[t * 3 + 2]
             val highlightFace = isEditMode && editSubMode == EditSubMode.FACE && t == (selectedElementIndex % maxTris.coerceAtLeast(1))
@@ -456,33 +622,28 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             val g = if (highlightFace) 0.83f else 0.40f
             val b = if (highlightFace) 0.93f else 0.95f
             val a = if (highlightFace) 1.0f else 0.65f
-            val pairs = arrayOf(i0 to i1, i1 to i2, i2 to i0)
-            for ((pa, pb) in pairs) {
-                val va = worldVerts[pa]; val vb = worldVerts[pb]
-                lineData[ptr++] = va.x; lineData[ptr++] = va.y; lineData[ptr++] = va.z
-                lineData[ptr++] = r; lineData[ptr++] = g; lineData[ptr++] = b; lineData[ptr++] = a
-                lineData[ptr++] = vb.x; lineData[ptr++] = vb.y; lineData[ptr++] = vb.z
-                lineData[ptr++] = r; lineData[ptr++] = g; lineData[ptr++] = b; lineData[ptr++] = a
-            }
+            putSeg(buf, worldVerts[i0], worldVerts[i1], r, g, b, a)
+            putSeg(buf, worldVerts[i1], worldVerts[i2], r, g, b, a)
+            putSeg(buf, worldVerts[i2], worldVerts[i0], r, g, b, a)
         }
-        drawColoredLines(toFloatBuffer(lineData), maxTris * 6, viewProj, GLES30.GL_LINES, 1.5f)
+        buf.position(0)
+        drawDynamicLines(buf, maxTris * 6, viewProj, GLES30.GL_LINES, 1.5f)
 
-        // Draw vertex points in Edit Mode
         if (isEditMode) {
             val vc = worldVerts.size.coerceAtMost(1500)
-            val ptData = FloatArray(vc * 7)
-            var pp = 0
+            val ptBuf = ensureDynamicBuffer(vc * 7)
             val selV = selectedElementIndex % vc.coerceAtLeast(1)
             for (i in 0 until vc) {
                 val p = worldVerts[i]
                 val isSel = editSubMode == EditSubMode.VERTEX && i == selV
-                ptData[pp++] = p.x; ptData[pp++] = p.y; ptData[pp++] = p.z
-                ptData[pp++] = if (isSel) 0.13f else 0.96f
-                ptData[pp++] = if (isSel) 0.83f else 0.62f
-                ptData[pp++] = if (isSel) 0.93f else 0.04f
-                ptData[pp++] = 1.0f
+                ptBuf.put(p.x).put(p.y).put(p.z)
+                ptBuf.put(if (isSel) 0.13f else 0.96f)
+                ptBuf.put(if (isSel) 0.83f else 0.62f)
+                ptBuf.put(if (isSel) 0.93f else 0.04f)
+                ptBuf.put(1.0f)
             }
-            drawColoredLines(toFloatBuffer(ptData), vc, viewProj, GLES30.GL_POINTS, 9.0f)
+            ptBuf.position(0)
+            drawDynamicLines(ptBuf, vc, viewProj, GLES30.GL_POINTS, 9.0f)
         }
     }
 
@@ -496,8 +657,9 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
     ) {
         if (skeleton.bones.isEmpty()) return
         val joints = skeleton.computeWorldJointPositions(bonePose)
-        val lineFloats = ArrayList<Float>()
-        val pointFloats = ArrayList<Float>()
+        val boneCount = skeleton.bones.size
+        val lineBuf = ensureDynamicBuffer(boneCount * 10 * 7)
+        var lineVerts = 0
 
         for (bone in skeleton.bones) {
             val (lh, lt) = joints[bone.id] ?: continue
@@ -508,29 +670,36 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             val g = if (isSel) 0.83f else if (isNodeSelected) 0.62f else 0.65f
             val b = if (isSel) 0.93f else if (isNodeSelected) 0.04f else 0.80f
 
-            // Main bone axis + diamond bone outline
-            val dir = (t - h)
-            val len = dir.length().coerceAtLeast(0.05f)
-            val side = Vec3(0.045f * (len / 0.4f).coerceIn(0.6f, 1.5f), 0f, 0f)
+            val len = (t - h).length().coerceAtLeast(0.05f)
+            val side = Vec3(0.042f * (len / 0.4f).coerceIn(0.6f, 1.4f), 0f, 0f)
             val mid = Vec3.lerp(h, t, 0.25f)
             val p1 = mid + side
             val p2 = mid - side
 
-            fun addSeg(a: Vec3, bPt: Vec3) {
-                lineFloats.add(a.x); lineFloats.add(a.y); lineFloats.add(a.z)
-                lineFloats.add(r); lineFloats.add(g); lineFloats.add(b); lineFloats.add(1f)
-                lineFloats.add(bPt.x); lineFloats.add(bPt.y); lineFloats.add(bPt.z)
-                lineFloats.add(r); lineFloats.add(g); lineFloats.add(b); lineFloats.add(1f)
-            }
-            addSeg(h, p1); addSeg(p1, t)
-            addSeg(h, p2); addSeg(p2, t)
-            addSeg(p1, p2)
-
-            pointFloats.add(h.x); pointFloats.add(h.y); pointFloats.add(h.z)
-            pointFloats.add(r); pointFloats.add(g); pointFloats.add(b); pointFloats.add(1f)
+            putSeg(lineBuf, h, p1, r, g, b, 1f)
+            putSeg(lineBuf, p1, t, r, g, b, 1f)
+            putSeg(lineBuf, h, p2, r, g, b, 1f)
+            putSeg(lineBuf, p2, t, r, g, b, 1f)
+            putSeg(lineBuf, p1, p2, r, g, b, 1f)
+            lineVerts += 10
         }
-        drawColoredLines(toFloatBuffer(lineFloats.toFloatArray()), lineFloats.size / 7, viewProj, GLES30.GL_LINES, 2.5f)
-        drawColoredLines(toFloatBuffer(pointFloats.toFloatArray()), pointFloats.size / 7, viewProj, GLES30.GL_POINTS, 12f)
+        lineBuf.position(0)
+        drawDynamicLines(lineBuf, lineVerts, viewProj, GLES30.GL_LINES, 2.5f)
+
+        val ptBuf = ensureDynamicBuffer(boneCount * 7)
+        var ptVerts = 0
+        for (bone in skeleton.bones) {
+            val (lh, _) = joints[bone.id] ?: continue
+            val h = Math3D.transformPoint(worldMatrix, lh)
+            val isSel = bone.id == selectedBoneId
+            val r = if (isSel) 0.13f else if (isNodeSelected) 0.96f else 0.60f
+            val g = if (isSel) 0.83f else if (isNodeSelected) 0.62f else 0.65f
+            val b = if (isSel) 0.93f else if (isNodeSelected) 0.04f else 0.80f
+            ptBuf.put(h.x).put(h.y).put(h.z).put(r).put(g).put(b).put(1f)
+            ptVerts++
+        }
+        ptBuf.position(0)
+        drawDynamicLines(ptBuf, ptVerts, viewProj, GLES30.GL_POINTS, 12f)
     }
 
     private fun drawHelpersForLightsAndCameras(
@@ -539,11 +708,15 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         selectedNodeId: String?,
         viewProj: FloatArray
     ) {
-        val segs = ArrayList<Float>()
-        fun addSeg(a: Vec3, b: Vec3, r: Float, g: Float, bl: Float) {
-            segs.add(a.x); segs.add(a.y); segs.add(a.z); segs.add(r); segs.add(g); segs.add(bl); segs.add(1f)
-            segs.add(b.x); segs.add(b.y); segs.add(b.z); segs.add(r); segs.add(g); segs.add(bl); segs.add(1f)
+        var helperVerts = 0
+        for (node in scene.nodes) {
+            if (node.nodeType == NodeType.LIGHT) helperVerts += 8
+            else if (node.nodeType == NodeType.CAMERA) helperVerts += 16
         }
+        if (helperVerts == 0) return
+
+        val buf = ensureDynamicBuffer(helperVerts * 7)
+        var written = 0
         for (node in scene.nodes) {
             val st = evaluated.nodeStates[node.id] ?: continue
             if (!st.visible) continue
@@ -551,51 +724,55 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             val sel = node.id == selectedNodeId
             when (node.nodeType) {
                 NodeType.LIGHT -> {
-                    val c = if (sel) floatArrayOf(0.13f, 0.83f, 0.93f) else floatArrayOf(0.96f, 0.62f, 0.04f)
+                    val r = if (sel) 0.13f else 0.96f
+                    val g = if (sel) 0.83f else 0.62f
+                    val b = if (sel) 0.93f else 0.04f
                     val s = 0.24f
-                    addSeg(p + Vec3(-s, 0f, 0f), p + Vec3(s, 0f, 0f), c[0], c[1], c[2])
-                    addSeg(p + Vec3(0f, -s, 0f), p + Vec3(0f, s, 0f), c[0], c[1], c[2])
-                    addSeg(p + Vec3(0f, 0f, -s), p + Vec3(0f, 0f, s), c[0], c[1], c[2])
-                    addSeg(p, Vec3(p.x, 0f, p.z), c[0] * 0.5f, c[1] * 0.5f, c[2] * 0.5f)
+                    putSeg(buf, p + Vec3(-s, 0f, 0f), p + Vec3(s, 0f, 0f), r, g, b, 1f)
+                    putSeg(buf, p + Vec3(0f, -s, 0f), p + Vec3(0f, s, 0f), r, g, b, 1f)
+                    putSeg(buf, p + Vec3(0f, 0f, -s), p + Vec3(0f, 0f, s), r, g, b, 1f)
+                    putSeg(buf, p, Vec3(p.x, 0f, p.z), r * 0.5f, g * 0.5f, b * 0.5f, 1f)
+                    written += 8
                 }
                 NodeType.CAMERA -> {
-                    val c = if (sel) floatArrayOf(0.13f, 0.83f, 0.93f) else floatArrayOf(0.65f, 0.72f, 0.90f)
+                    val r = if (sel) 0.13f else 0.65f
+                    val g = if (sel) 0.83f else 0.72f
+                    val b = if (sel) 0.93f else 0.90f
                     val f = Vec3(0f, 0f, -0.45f)
                     val c1 = p + f + Vec3(-0.22f, 0.14f, 0f)
                     val c2 = p + f + Vec3(0.22f, 0.14f, 0f)
                     val c3 = p + f + Vec3(0.22f, -0.14f, 0f)
                     val c4 = p + f + Vec3(-0.22f, -0.14f, 0f)
-                    addSeg(p, c1, c[0], c[1], c[2]); addSeg(p, c2, c[0], c[1], c[2])
-                    addSeg(p, c3, c[0], c[1], c[2]); addSeg(p, c4, c[0], c[1], c[2])
-                    addSeg(c1, c2, c[0], c[1], c[2]); addSeg(c2, c3, c[0], c[1], c[2])
-                    addSeg(c3, c4, c[0], c[1], c[2]); addSeg(c4, c1, c[0], c[1], c[2])
+                    putSeg(buf, p, c1, r, g, b, 1f); putSeg(buf, p, c2, r, g, b, 1f)
+                    putSeg(buf, p, c3, r, g, b, 1f); putSeg(buf, p, c4, r, g, b, 1f)
+                    putSeg(buf, c1, c2, r, g, b, 1f); putSeg(buf, c2, c3, r, g, b, 1f)
+                    putSeg(buf, c3, c4, r, g, b, 1f); putSeg(buf, c4, c1, r, g, b, 1f)
+                    written += 16
                 }
                 else -> Unit
             }
         }
-        if (segs.isNotEmpty()) {
-            drawColoredLines(toFloatBuffer(segs.toFloatArray()), segs.size / 7, viewProj, GLES30.GL_LINES, 2.2f)
+        if (written > 0) {
+            buf.position(0)
+            drawDynamicLines(buf, written, viewProj, GLES30.GL_LINES, 2.2f)
         }
     }
 
     private fun drawTransformGizmo(origin: Vec3, activeAxis: TransformAxis, viewProj: FloatArray) {
         val len = 0.95f
-        val segs = ArrayList<Float>()
+        val buf = ensureDynamicBuffer(6 * 7)
         fun axis(dir: Vec3, r: Float, g: Float, b: Float, bright: Boolean) {
             val boost = if (bright) 1.0f else 0.45f
-            val tip = origin + dir * len
-            segs.add(origin.x); segs.add(origin.y); segs.add(origin.z)
-            segs.add(r * boost); segs.add(g * boost); segs.add(b * boost); segs.add(1f)
-            segs.add(tip.x); segs.add(tip.y); segs.add(tip.z)
-            segs.add(r * boost); segs.add(g * boost); segs.add(b * boost); segs.add(1f)
+            putSeg(buf, origin, origin + dir * len, r * boost, g * boost, b * boost, 1f)
         }
         axis(Vec3(1f, 0f, 0f), 0.94f, 0.27f, 0.27f, activeAxis == TransformAxis.ALL || activeAxis == TransformAxis.X)
         axis(Vec3(0f, 1f, 0f), 0.13f, 0.77f, 0.37f, activeAxis == TransformAxis.ALL || activeAxis == TransformAxis.Y)
         axis(Vec3(0f, 0f, 1f), 0.23f, 0.51f, 0.96f, activeAxis == TransformAxis.ALL || activeAxis == TransformAxis.Z)
-        drawColoredLines(toFloatBuffer(segs.toFloatArray()), segs.size / 7, viewProj, GLES30.GL_LINES, 4.0f)
+        buf.position(0)
+        drawDynamicLines(buf, 6, viewProj, GLES30.GL_LINES, 4.0f)
     }
 
-    private fun drawColoredLines(
+    private fun drawDynamicLines(
         interleavedBuffer: FloatBuffer,
         vertexCount: Int,
         viewProj: FloatArray,
@@ -604,25 +781,26 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
     ) {
         if (vertexCount <= 0) return
         GLES30.glUseProgram(lineProgram)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(lineProgram, "uViewProj"), 1, false, viewProj, 0)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(lineProgram, "uPointSize"), widthOrPointSize)
+        GLES30.glUniformMatrix4fv(uLineViewProj, 1, false, viewProj, 0)
+        GLES30.glUniform1f(uLinePointSize, widthOrPointSize)
         if (mode == GLES30.GL_LINES) GLES30.glLineWidth(widthOrPointSize)
 
         val stride = 7 * 4
-        interleavedBuffer.position(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, dynamicLineVbo)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, vertexCount * stride, interleavedBuffer, GLES30.GL_STREAM_DRAW)
         GLES30.glEnableVertexAttribArray(0)
-        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, interleavedBuffer)
-        interleavedBuffer.position(3)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
         GLES30.glEnableVertexAttribArray(1)
-        GLES30.glVertexAttribPointer(1, 4, GLES30.GL_FLOAT, false, stride, interleavedBuffer)
+        GLES30.glVertexAttribPointer(1, 4, GLES30.GL_FLOAT, false, stride, 3 * 4)
 
         GLES30.glDrawArrays(mode, 0, vertexCount)
 
         GLES30.glDisableVertexAttribArray(0)
         GLES30.glDisableVertexAttribArray(1)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
-    private fun buildGridAndAxesBuffer(): FloatBuffer {
+    private fun initStaticGridVao() {
         val list = ArrayList<Float>()
         val half = 8
         fun addLine(x1: Float, y1: Float, z1: Float, x2: Float, y2: Float, z2: Float, r: Float, g: Float, b: Float, a: Float) {
@@ -631,17 +809,35 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         }
         for (i in -half..half) {
             if (i == 0) continue
-            val alpha = if (abs(i) % 4 == 0) 0.40f else 0.18f
+            val alpha = if (abs(i) % 4 == 0) 0.42f else 0.18f
             addLine(i.toFloat(), 0f, -half.toFloat(), i.toFloat(), 0f, half.toFloat(), 0.25f, 0.30f, 0.42f, alpha)
             addLine(-half.toFloat(), 0f, i.toFloat(), half.toFloat(), 0f, i.toFloat(), 0.25f, 0.30f, 0.42f, alpha)
         }
-        // World X (Red) and Z (Blue) primary grid lines
         addLine(-half.toFloat(), 0.002f, 0f, half.toFloat(), 0.002f, 0f, 0.90f, 0.27f, 0.27f, 0.85f)
         addLine(0f, 0.002f, -half.toFloat(), 0f, 0.002f, half.toFloat(), 0.23f, 0.51f, 0.96f, 0.85f)
-        // Subtle Y vertical origin indicator
         addLine(0f, 0f, 0f, 0f, 1.5f, 0f, 0.13f, 0.77f, 0.37f, 0.55f)
+
         gridVertexCount = list.size / 7
-        return toFloatBuffer(list.toFloatArray())
+        val arr = list.toFloatArray()
+        val buf = allocateDirectFloatBuffer(arr.size).apply { put(arr); position(0) }
+
+        val vaoArr = IntArray(1)
+        val vboArr = IntArray(1)
+        GLES30.glGenVertexArrays(1, vaoArr, 0)
+        GLES30.glGenBuffers(1, vboArr, 0)
+        gridVao = vaoArr[0]
+        gridVbo = vboArr[0]
+
+        val stride = 7 * 4
+        GLES30.glBindVertexArray(gridVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, gridVbo)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, arr.size * 4, buf, GLES30.GL_STATIC_DRAW)
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, stride, 0)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(1, 4, GLES30.GL_FLOAT, false, stride, 3 * 4)
+        GLES30.glBindVertexArray(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
     private fun getOrLoadTexture(path: String): Int {
@@ -665,15 +861,21 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         return texId
     }
 
-    private fun toFloatBuffer(arr: FloatArray): FloatBuffer =
-        ByteBuffer.allocateDirect(arr.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-            put(arr)
-            position(0)
-        }
+    private fun putSeg(buf: FloatBuffer, a: Vec3, b: Vec3, r: Float, g: Float, bl: Float, al: Float) {
+        buf.put(a.x).put(a.y).put(a.z).put(r).put(g).put(bl).put(al)
+        buf.put(b.x).put(b.y).put(b.z).put(r).put(g).put(bl).put(al)
+    }
 
-    private fun toIntBuffer(arr: IntArray): IntBuffer =
-        ByteBuffer.allocateDirect(arr.size * 4).order(ByteOrder.nativeOrder()).asIntBuffer().apply {
-            put(arr)
-            position(0)
+    private fun ensureDynamicBuffer(floatCapacity: Int): FloatBuffer {
+        if (dynamicLineBuffer.capacity() < floatCapacity) {
+            dynamicLineBuffer = allocateDirectFloatBuffer(maxOf(floatCapacity, dynamicLineBuffer.capacity() * 2))
         }
+        dynamicLineBuffer.clear()
+        return dynamicLineBuffer
+    }
+
+    private fun allocateDirectFloatBuffer(floatCount: Int): FloatBuffer =
+        ByteBuffer.allocateDirect(floatCount.coerceAtLeast(16) * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
 }

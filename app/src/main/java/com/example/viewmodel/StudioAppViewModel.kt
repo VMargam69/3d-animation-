@@ -437,13 +437,35 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setNodeParent(nodeId: String, parentId: String?) {
         if (nodeId == parentId) return
+        if (parentId != null && wouldCreateHierarchyCycle(nodeId, parentId)) {
+            notify("Cannot parent object to its own descendant")
+            return
+        }
         mutateScene { doc ->
             doc.copy(nodes = doc.nodes.map { if (it.id == nodeId) it.copy(parentId = parentId) else it })
         }
     }
 
+    private fun wouldCreateHierarchyCycle(nodeId: String, candidateParentId: String): Boolean {
+        val nodeMap = _uiState.value.scene.nodes.associateBy { it.id }
+        var cursor: String? = candidateParentId
+        val visited = HashSet<String>()
+        while (cursor != null && visited.add(cursor)) {
+            if (cursor == nodeId) return true
+            cursor = nodeMap[cursor]?.parentId
+        }
+        return false
+    }
+
+    private fun isNodeLocked(nodeId: String): Boolean =
+        _uiState.value.scene.timeline.lockedTrackNodeIds.contains(nodeId)
+
     fun updateSelectedTransform(transform: Transform3D) {
         val selId = _uiState.value.selectedNodeId ?: return
+        if (isNodeLocked(selId)) {
+            notify("Layer is locked on timeline")
+            return
+        }
         mutateScene(recordUndo = false) { doc ->
             val updatedNodes = doc.nodes.map { if (it.id == selId) it.copy(transform = transform) else it }
             var tl = doc.timeline
@@ -514,6 +536,10 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun applyEditSubElementDelta(delta: Vec3) {
         val selId = _uiState.value.selectedNodeId ?: return
+        if (isNodeLocked(selId)) {
+            notify("Layer is locked on timeline")
+            return
+        }
         val sub = _uiState.value.editSubMode
         val elemIdx = _uiState.value.selectedElementIndex
         mutateScene { doc ->
@@ -647,6 +673,10 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
     fun updateSelectedBonePose(rotation: Vec3, length: Float? = null) {
         val selId = _uiState.value.selectedNodeId ?: return
         val bId = _uiState.value.selectedBoneId ?: return
+        if (isNodeLocked(selId)) {
+            notify("Layer is locked on timeline")
+            return
+        }
         mutateScene(recordUndo = false) { doc ->
             val updatedNodes = doc.nodes.map { n ->
                 if (n.id == selId && n.skeleton != null) {
@@ -661,6 +691,22 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
             }
             doc.copy(nodes = updatedNodes, timeline = tl)
         }
+    }
+
+    fun resetSelectedSkeletonPose() {
+        val selId = _uiState.value.selectedNodeId ?: return
+        if (isNodeLocked(selId)) {
+            notify("Layer is locked on timeline")
+            return
+        }
+        mutateScene { doc ->
+            doc.copy(nodes = doc.nodes.map { n ->
+                if (n.id == selId && n.skeleton != null) {
+                    n.copy(skeleton = SkeletonData(n.skeleton.bones.map { b -> b.copy(poseRotation = Vec3.ZERO) }))
+                } else n
+            })
+        }
+        notify("Reset armature to rest pose")
     }
 
     fun autoBindSelectedMesh() {
@@ -762,6 +808,10 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
     fun insertKeyframeAtCurrentFrame() {
         val node = selectedNode() ?: run {
             notify("Select an object or bone first")
+            return
+        }
+        if (isNodeLocked(node.id)) {
+            notify("Layer is locked on timeline")
             return
         }
         val frame = _uiState.value.scene.timeline.currentFrame.toInt()
@@ -945,7 +995,9 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
                 node = node,
                 assetCategory = AssetCategory.CHARACTERS,
                 characterCategory = spec.category,
-                costumePreset = spec.costume
+                costumePreset = spec.costume,
+                secondaryColorHex = spec.secondaryColor,
+                archetype = spec.bodyType
             )
             if (openInScene) {
                 if (_uiState.value.destination == AppDestination.EDITOR) {

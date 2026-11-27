@@ -287,7 +287,8 @@ fun EditorScreen(
                         onOrbit = { dy, dp -> viewModel.orbitCamera(dy, dp) },
                         onPan = { dx, dy -> viewModel.panCamera(dx, dy) },
                         onZoom = { z -> viewModel.zoomCamera(z) },
-                        onSelectNodeOrBone = { nId, bId -> viewModel.selectNode(nId, bId) }
+                        onSelectNodeOrBone = { nId, bId -> viewModel.selectNode(nId, bId) },
+                        onDoubleTapFocus = viewModel::focusSelectedObject
                     )
 
                     // Top-Left HUD Stats Pill
@@ -430,6 +431,7 @@ fun EditorScreen(
                                 onRenameBone = viewModel::renameSelectedBone,
                                 onDeleteBone = viewModel::deleteSelectedBone,
                                 onUpdateBonePose = viewModel::updateSelectedBonePose,
+                                onResetPose = viewModel::resetSelectedSkeletonPose,
                                 onAutoBindWeights = viewModel::autoBindSelectedMesh
                             )
                         }
@@ -469,6 +471,7 @@ fun EditorScreen(
                         onRenameBone = viewModel::renameSelectedBone,
                         onDeleteBone = viewModel::deleteSelectedBone,
                         onUpdateBonePose = viewModel::updateSelectedBonePose,
+                        onResetPose = viewModel::resetSelectedSkeletonPose,
                         onAutoBindWeights = viewModel::autoBindSelectedMesh,
                         modifier = Modifier.width(320.dp)
                     )
@@ -589,6 +592,7 @@ fun EditorScreen(
             onToggleTrackVisibility = viewModel::toggleTrackVisibility,
             onToggleTrackLock = viewModel::toggleTrackLock,
             onSelectNode = { viewModel.selectNode(it) },
+            onUpdateClip = viewModel::updateClip,
             onDeleteClip = viewModel::deleteClip,
             onZoomTimeline = viewModel::adjustTimelineZoom
         )
