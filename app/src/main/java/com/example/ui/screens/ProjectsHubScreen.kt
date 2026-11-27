@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,14 +17,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
@@ -57,10 +59,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.ProjectEntity
+import com.example.data.StarterTemplateInfo
+import com.example.data.StudioRepository
 import com.example.ui.theme.CharcoalCanvas
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.ElectricIndigo
@@ -83,6 +89,7 @@ import java.util.Locale
 fun ProjectsHubScreen(
     projects: List<ProjectEntity>,
     onQuickStart: () -> Unit,
+    onOpenTemplate: (String) -> Unit,
     onCreateBlank: (String) -> Unit,
     onOpenProject: (String, Boolean) -> Unit,
     onRenameProject: (String, String) -> Unit,
@@ -118,7 +125,7 @@ fun ProjectsHubScreen(
                         .background(
                             Brush.linearGradient(
                                 listOf(
-                                    ElectricIndigoDark.copy(alpha = 0.35f),
+                                    ElectricIndigoDark.copy(alpha = 0.38f),
                                     PanelNearBlack,
                                     Color(0xFF0E2530).copy(alpha = 0.45f)
                                 )
@@ -137,7 +144,7 @@ fun ProjectsHubScreen(
                                 border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.5f))
                             ) {
                                 Text(
-                                    text = "100% OFFLINE • OPENGL ES 3.0",
+                                    text = "PRO OFFLINE • IK RIG • OPENGL ES 3.0",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = StudioCyan,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -148,7 +155,7 @@ fun ProjectsHubScreen(
                                 onClick = onOpenBlenderGuide,
                                 modifier = Modifier.size(36.dp).testTag("blender_guide_button")
                             ) {
-                                Icon(Icons.Rounded.HelpOutline, contentDescription = "Blender Export Guide", tint = TextSecondary)
+                                Icon(Icons.Rounded.HelpOutline, contentDescription = "Blender Format Guide", tint = TextSecondary)
                             }
                         }
 
@@ -158,7 +165,7 @@ fun ProjectsHubScreen(
                             color = TextPrimary
                         )
                         Text(
-                            text = "Launch a rigged studio character with timeline motion, model primitives, or import your own Blender .glb / .obj / .stl assets.",
+                            text = "Pose with real-time 3D IK handles, stamp saved poses onto the timeline, switch 3D worlds, or import any Blender model.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
@@ -198,21 +205,71 @@ fun ProjectsHubScreen(
                             onClick = onImportBlenderFile,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(44.dp)
+                                .height(46.dp)
                                 .testTag("hub_import_blender_button"),
                             shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.45f))
+                            border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.50f))
                         ) {
                             Icon(Icons.Rounded.FileUpload, contentDescription = null, tint = StudioCyan, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Import Blender 3D Asset (.glb / .gltf / .obj / .stl)", color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "Import Blender 3D (.glb • .obj • .fbx • .blend • .fbm.zip • .stl)",
+                                color = TextPrimary,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Section Header
+        // Offline Starter Templates Carousel (with 3D Environments, Characters, Lights & Pre-built Timelines)
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Offline Starter Templates",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
+                    Surface(
+                        color = ElectricIndigo.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, ElectricIndigo.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "3D BACKGROUNDS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StudioCyan,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("starter_templates_carousel")
+                ) {
+                    items(StudioRepository.STARTER_TEMPLATES, key = { it.id }) { tpl ->
+                        StarterTemplateCard(
+                            template = tpl,
+                            onClick = { onOpenTemplate(tpl.id) }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Local Projects Section Header
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -242,7 +299,7 @@ fun ProjectsHubScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(28.dp),
+                            .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -250,11 +307,11 @@ fun ProjectsHubScreen(
                             imageVector = Icons.Rounded.ViewInAr,
                             contentDescription = null,
                             tint = ElectricIndigo,
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(38.dp)
                         )
                         Text("No local 3D scenes yet", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                         Text(
-                            "Tap Quick-Start Scene above to load a rigged 3D character, lights, camera, and animated timeline.",
+                            "Tap any Offline Starter Template above or Quick-Start Scene to launch a complete 3D stage.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -335,6 +392,80 @@ fun ProjectsHubScreen(
                 TextButton(onClick = { renameTarget = null }) { Text("Cancel", color = TextSecondary) }
             }
         )
+    }
+}
+
+@Composable
+private fun StarterTemplateCard(
+    template: StarterTemplateInfo,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = SurfaceCard,
+        border = BorderStroke(1.dp, HairlineBorder),
+        modifier = Modifier
+            .width(232.dp)
+            .clickable(onClick = onClick)
+            .testTag("starter_template_${template.id}")
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(118.dp)
+                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+            ) {
+                Image(
+                    painter = painterResource(id = template.drawableResId),
+                    contentDescription = template.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Transparent, PanelNearBlack.copy(alpha = 0.65f))
+                            )
+                        )
+                )
+                Surface(
+                    color = CharcoalCanvas.copy(alpha = 0.82f),
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.45f)),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                ) {
+                    Text(
+                        text = template.aspectLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                        color = StudioCyan,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = template.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = template.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
 }
 

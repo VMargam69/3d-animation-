@@ -1,5 +1,6 @@
 package com.example.engine.gl
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
@@ -7,17 +8,22 @@ import android.opengl.GLUtils
 import android.opengl.Matrix
 import com.example.engine.animation.AnimationEvaluator
 import com.example.engine.animation.EvaluatedScene
+import com.example.engine.animation.IkSolver
 import com.example.engine.model.Aabb3D
+import com.example.engine.model.BackdropPreset
 import com.example.engine.model.CameraPreset
 import com.example.engine.model.EditSubMode
 import com.example.engine.model.EditorMode
+import com.example.engine.model.IkLimb
 import com.example.engine.model.LightType
+import com.example.engine.model.MaterialData
 import com.example.engine.model.Math3D
 import com.example.engine.model.MeshData
 import com.example.engine.model.NodeType
 import com.example.engine.model.SceneDocument
 import com.example.engine.model.ShadingMode
 import com.example.engine.model.SkeletonData
+import com.example.engine.model.SkinPreset
 import com.example.engine.model.TransformAxis
 import com.example.engine.model.TransformTool
 import com.example.engine.model.Vec3
@@ -41,7 +47,11 @@ data class RenderConfig(
     val transformAxis: TransformAxis = TransformAxis.ALL,
     val showGrid: Boolean = true,
     val showSkeleton: Boolean = true,
-    val showGizmo: Boolean = true
+    val showGizmo: Boolean = true,
+    val ikEnabled: Boolean = true,
+    val selectedIkLimb: IkLimb? = null,
+    val showOnionSkin: Boolean = false,
+    val onFpsSample: ((Int) -> Unit)? = null
 )
 
 private class GpuMeshHandle(
@@ -61,20 +71,33 @@ private class GpuMeshHandle(
 /**
  * High-performance OpenGL ES 3.0 Scene Renderer featuring:
  * - Persistent VAO + VBO + IBO GPU mesh caching (zero per-frame DirectBuffer allocations for meshes)
- * - Cached shader uniform locations
- * - Static GPU VAO for floor grid & world axes
- * - Single reusable dynamic FloatBuffer for skeleton/gizmo/wireframe overlays
+ * - Live procedural 3D Sky Dome backdrop (zero VBO overhead)
+ * - Procedural GPU SkinPreset texture synthesis + warm subsurface skin lighting + Pro Toon/Cel shading
+ * - Real-time 3D IK diamond handles & camera-plane drag unprojection
+ * - Onion Skinning ghost silhouette pass (-6f cyan, +6f amber)
  */
 class GlSceneRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var config: RenderConfig = RenderConfig()
 
+    private var skyProgram = 0
     private var meshProgram = 0
     private var lineProgram = 0
     private var viewportW = 1
     private var viewportH = 1
     private var frameCounter = 0L
+
+    // FPS tracking (zero allocation)
+    private var fpsWindowStartNs = 0L
+    private var fpsFrameAcc = 0
+
+    // Cached uniform locations for skyProgram
+    private var uSkyZenith = -1
+    private var uSkyHorizon = -1
+    private var uSkyGround = -1
+    private var uSkySun = -1
+    private var uSkyShift = -1
 
     // Cached uniform locations for meshProgram
     private var uModel = -1
@@ -85,6 +108,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
     private var uRoughness = -1
     private var uMetallic = -1
     private var uOpacity = -1
+    private var uSubsurface = -1
     private var uEmissionColor = -1
     private var uEmissionStrength = -1
     private var uUvScale = -1
@@ -93,6 +117,8 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
     private var uShadingMode = -1
     private var uIsSelected = -1
     private var uUseVertexColors = -1
+    private var uGhostColor = -1
+    private var uGhostAlpha = -1
     private var uUseSkinning = -1
     private var uBoneMatrices = -1
     private var uLightCount = -1
@@ -125,15 +151,25 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
 
     private val lastViewMatrix = Math3D.identity()
     private val lastProjMatrix = Math3D.identity()
+    @Volatile
+    private var lastCameraPos = Vec3(0f, 1.8f, 5.5f)
 
     private var initialized = false
 
     fun initGl() {
         if (initialized) return
+        skyProgram = ShaderLibrary.compileProgram(ShaderLibrary.SKY_VERTEX_SHADER, ShaderLibrary.SKY_FRAGMENT_SHADER)
         meshProgram = ShaderLibrary.compileProgram(ShaderLibrary.MESH_VERTEX_SHADER, ShaderLibrary.MESH_FRAGMENT_SHADER)
         lineProgram = ShaderLibrary.compileProgram(ShaderLibrary.LINE_VERTEX_SHADER, ShaderLibrary.LINE_FRAGMENT_SHADER)
 
-        // Cache all uniform locations once
+        // Cache sky uniforms
+        uSkyZenith = GLES30.glGetUniformLocation(skyProgram, "uZenithColor")
+        uSkyHorizon = GLES30.glGetUniformLocation(skyProgram, "uHorizonColor")
+        uSkyGround = GLES30.glGetUniformLocation(skyProgram, "uGroundColor")
+        uSkySun = GLES30.glGetUniformLocation(skyProgram, "uSunColor")
+        uSkyShift = GLES30.glGetUniformLocation(skyProgram, "uHorizonShift")
+
+        // Cache mesh uniforms
         uModel = GLES30.glGetUniformLocation(meshProgram, "uModel")
         uView = GLES30.glGetUniformLocation(meshProgram, "uView")
         uProjection = GLES30.glGetUniformLocation(meshProgram, "uProjection")
@@ -142,6 +178,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         uRoughness = GLES30.glGetUniformLocation(meshProgram, "uRoughness")
         uMetallic = GLES30.glGetUniformLocation(meshProgram, "uMetallic")
         uOpacity = GLES30.glGetUniformLocation(meshProgram, "uOpacity")
+        uSubsurface = GLES30.glGetUniformLocation(meshProgram, "uSubsurface")
         uEmissionColor = GLES30.glGetUniformLocation(meshProgram, "uEmissionColor")
         uEmissionStrength = GLES30.glGetUniformLocation(meshProgram, "uEmissionStrength")
         uUvScale = GLES30.glGetUniformLocation(meshProgram, "uUvScale")
@@ -150,6 +187,8 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         uShadingMode = GLES30.glGetUniformLocation(meshProgram, "uShadingMode")
         uIsSelected = GLES30.glGetUniformLocation(meshProgram, "uIsSelected")
         uUseVertexColors = GLES30.glGetUniformLocation(meshProgram, "uUseVertexColors")
+        uGhostColor = GLES30.glGetUniformLocation(meshProgram, "uGhostColor")
+        uGhostAlpha = GLES30.glGetUniformLocation(meshProgram, "uGhostAlpha")
         uUseSkinning = GLES30.glGetUniformLocation(meshProgram, "uUseSkinning")
         uBoneMatrices = GLES30.glGetUniformLocation(meshProgram, "uBoneMatrices")
         uLightCount = GLES30.glGetUniformLocation(meshProgram, "uLightCount")
@@ -180,6 +219,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         if (gridVbo != 0) GLES30.glDeleteBuffers(1, intArrayOf(gridVbo), 0)
         if (gridVao != 0) GLES30.glDeleteVertexArrays(1, intArrayOf(gridVao), 0)
         if (dynamicLineVbo != 0) GLES30.glDeleteBuffers(1, intArrayOf(dynamicLineVbo), 0)
+        if (skyProgram != 0) GLES30.glDeleteProgram(skyProgram)
         if (meshProgram != 0) GLES30.glDeleteProgram(meshProgram)
         if (lineProgram != 0) GLES30.glDeleteProgram(lineProgram)
         if (textureCache.isNotEmpty()) {
@@ -190,18 +230,19 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         gridVao = 0
         gridVbo = 0
         dynamicLineVbo = 0
+        skyProgram = 0
         meshProgram = 0
         lineProgram = 0
         initialized = false
     }
 
     override fun onSurfaceCreated(gl: GL10?, eglConfig: EGLConfig?) {
-        // EGL context was recreated; drop stale GL handles without calling delete on old context
         gpuMeshCache.clear()
         textureCache.clear()
         gridVao = 0
         gridVbo = 0
         dynamicLineVbo = 0
+        skyProgram = 0
         meshProgram = 0
         lineProgram = 0
         initialized = false
@@ -224,6 +265,25 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             evaluated = evaluated,
             forExport = false
         )
+        sampleFps(cfg)
+    }
+
+    private fun sampleFps(cfg: RenderConfig) {
+        val cb = cfg.onFpsSample ?: return
+        val now = System.nanoTime()
+        if (fpsWindowStartNs == 0L) {
+            fpsWindowStartNs = now
+            fpsFrameAcc = 0
+            return
+        }
+        fpsFrameAcc++
+        val elapsedNs = now - fpsWindowStartNs
+        if (elapsedNs >= 600_000_000L) {
+            val fps = ((fpsFrameAcc * 1_000_000_000.0) / elapsedNs.toDouble()).toInt().coerceIn(1, 120)
+            fpsWindowStartNs = now
+            fpsFrameAcc = 0
+            cb(fps)
+        }
     }
 
     /**
@@ -240,14 +300,18 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         frameCounter++
 
         GLES30.glViewport(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
-        GLES30.glClearColor(0.055f, 0.063f, 0.086f, 1.0f) // #0E1015 dark charcoal
+        GLES30.glClearColor(0.055f, 0.063f, 0.086f, 1.0f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
         val aspect = width.toFloat() / height.coerceAtLeast(1).toFloat()
         val camPos = computeCameraMatricesInto(cfg.scene, evaluated, aspect, forExport, tempViewMat, tempProjMat)
+        lastCameraPos = camPos
         System.arraycopy(tempViewMat, 0, lastViewMatrix, 0, 16)
         System.arraycopy(tempProjMat, 0, lastProjMatrix, 0, 16)
         Matrix.multiplyMM(tempViewProj, 0, tempProjMat, 0, tempViewMat, 0)
+
+        // 0. Live 3D Sky Dome Gradient Backdrop
+        drawSkyBackdrop(cfg.scene.backdropPreset, cfg.scene.viewportCamera.pitchDeg)
 
         // 1. Floor Grid & World XYZ Axes (static GPU VAO, zero allocation)
         if (cfg.showGrid && !forExport && gridVao != 0) {
@@ -295,12 +359,19 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1fv(uLightIntensity, 4, lightIntArr, 0)
         GLES30.glUniform1iv(uLightType, 4, lightTypeArr, 0)
 
-        val shadingInt = when (if (forExport) ShadingMode.MATERIAL else cfg.shadingMode) {
+        val effectiveMode = if (forExport) {
+            if (cfg.shadingMode == ShadingMode.TOON) ShadingMode.TOON else ShadingMode.MATERIAL
+        } else {
+            cfg.shadingMode
+        }
+        val shadingInt = when (effectiveMode) {
             ShadingMode.SOLID -> 0
             ShadingMode.MATERIAL -> 1
             ShadingMode.WIREFRAME -> 2
+            ShadingMode.TOON -> 3
         }
         GLES30.glUniform1i(uShadingMode, shadingInt)
+        GLES30.glUniform1f(uGhostAlpha, 0f)
 
         for (node in cfg.scene.nodes) {
             val state = evaluated.nodeStates[node.id] ?: continue
@@ -318,7 +389,11 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                     material = node.material,
                     skeleton = node.skeleton,
                     bonePose = state.boneRotations,
-                    isSelected = isSelected
+                    isSelected = isSelected,
+                    ghostAlpha = 0f,
+                    ghostR = 0f,
+                    ghostG = 0f,
+                    ghostB = 0f
                 )
             }
 
@@ -334,6 +409,11 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                     selectedElementIndex = cfg.selectedElementIndex
                 )
             }
+        }
+
+        // 3b. Pro Onion Skinning Ghost Pass (-6f Cyan, +6f Amber) for rigged characters
+        if (!forExport && cfg.showOnionSkin && shadingInt != 2) {
+            drawOnionSkinGhosts(cfg)
         }
 
         // Periodically prune GPU VAOs for deleted nodes (every 120 frames)
@@ -352,7 +432,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             // 4. Light & Camera Viewport Markers
             drawHelpersForLightsAndCameras(cfg.scene, evaluated, cfg.selectedNodeId, tempViewProj)
 
-            // 5. Skeleton Armatures
+            // 5. Skeleton Armatures + 3D IK Handles
             if (cfg.showSkeleton || cfg.editorMode == EditorMode.POSE) {
                 GLES30.glDisable(GLES30.GL_DEPTH_TEST)
                 for (node in cfg.scene.nodes) {
@@ -361,6 +441,15 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                     if (!state.visible) continue
                     val highlightAll = node.id == cfg.selectedNodeId
                     drawSkeletonOverlay(skel, state.worldMatrix, state.boneRotations, cfg.selectedBoneId, highlightAll, tempViewProj)
+                    if (cfg.ikEnabled && (highlightAll || cfg.editorMode == EditorMode.POSE)) {
+                        drawIkHandlesOverlay(
+                            skeleton = skel,
+                            worldMatrix = state.worldMatrix,
+                            bonePose = state.boneRotations,
+                            selectedLimb = if (highlightAll) cfg.selectedIkLimb else null,
+                            viewProj = tempViewProj
+                        )
+                    }
                 }
                 GLES30.glEnable(GLES30.GL_DEPTH_TEST)
             }
@@ -375,6 +464,126 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
                 }
             }
         }
+    }
+
+    private fun drawSkyBackdrop(preset: BackdropPreset, cameraPitchDeg: Float) {
+        if (skyProgram == 0) return
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glDepthMask(false)
+        GLES30.glUseProgram(skyProgram)
+        setColorUniform(uSkyZenith, preset.zenithHex)
+        setColorUniform(uSkyHorizon, preset.horizonHex)
+        setColorUniform(uSkyGround, preset.groundHex)
+        setColorUniform(uSkySun, preset.sunColorHex)
+        val pitchShift = (cameraPitchDeg / 180f).coerceIn(-0.35f, 0.35f)
+        GLES30.glUniform1f(uSkyShift, pitchShift)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        GLES30.glDepthMask(true)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+    }
+
+    private fun drawOnionSkinGhosts(cfg: RenderConfig) {
+        val curFrame = cfg.scene.timeline.currentFrame
+        val total = cfg.scene.timeline.totalFrames.toFloat().coerceAtLeast(1f)
+        val prevFrame = (curFrame - 6f).coerceIn(0f, total)
+        val nextFrame = (curFrame + 6f).coerceIn(0f, total)
+
+        GLES30.glDepthMask(false)
+        GLES30.glUseProgram(meshProgram)
+        GLES30.glUniformMatrix4fv(uView, 1, false, tempViewMat, 0)
+        GLES30.glUniformMatrix4fv(uProjection, 1, false, tempProjMat, 0)
+
+        fun renderGhostAt(frame: Float, r: Float, g: Float, b: Float) {
+            if (abs(frame - curFrame) < 0.4f) return
+            val eval = AnimationEvaluator.evaluate(cfg.scene, frame)
+            for (node in cfg.scene.nodes) {
+                if (node.skeleton == null) continue
+                val mesh = node.mesh ?: continue
+                val st = eval.nodeStates[node.id] ?: continue
+                if (!st.visible) continue
+                drawMeshSolidCached(
+                    cacheKey = node.id,
+                    mesh = mesh,
+                    worldMatrix = st.worldMatrix,
+                    material = node.material,
+                    skeleton = node.skeleton,
+                    bonePose = st.boneRotations,
+                    isSelected = false,
+                    ghostAlpha = 0.28f,
+                    ghostR = r,
+                    ghostG = g,
+                    ghostB = b
+                )
+            }
+        }
+        renderGhostAt(prevFrame, 0.13f, 0.83f, 0.93f) // Previous frame = Cyan
+        renderGhostAt(nextFrame, 0.96f, 0.62f, 0.04f) // Next frame = Amber
+        GLES30.glUniform1f(uGhostAlpha, 0f)
+        GLES30.glDepthMask(true)
+    }
+
+    private fun setColorUniform(loc: Int, hex: Long) {
+        GLES30.glUniform3f(
+            loc,
+            ((hex shr 16) and 0xFF) / 255f,
+            ((hex shr 8) and 0xFF) / 255f,
+            (hex and 0xFF) / 255f
+        )
+    }
+
+    /**
+     * Picks an interactive 3D IK handle (diamond) if touch lands within generous touch radius.
+     */
+    fun pickIkHandleAtScreenPoint(touchX: Float, touchY: Float): Pair<String, IkLimb>? {
+        val cfg = config
+        if (!cfg.ikEnabled) return null
+        val evaluated = AnimationEvaluator.evaluate(cfg.scene, cfg.scene.timeline.currentFrame)
+        val ray = Math3D.unprojectRay(touchX, touchY, viewportW, viewportH, lastViewMatrix, lastProjMatrix)
+
+        val candidates = cfg.scene.nodes.filter { it.skeleton != null }
+        val ordered = if (cfg.selectedNodeId != null) {
+            candidates.sortedByDescending { it.id == cfg.selectedNodeId }
+        } else candidates
+
+        var bestHit: Pair<String, IkLimb>? = null
+        var bestDist = Float.POSITIVE_INFINITY
+        for (node in ordered) {
+            val skel = node.skeleton ?: continue
+            val state = evaluated.nodeStates[node.id] ?: continue
+            if (!state.visible) continue
+            val handles = IkSolver.computeIkHandleWorldPositions(skel, state.worldMatrix, state.boneRotations)
+            for ((limb, worldPos) in handles) {
+                val hit = Math3D.raySphereHitDistance(ray, worldPos, 0.26f)
+                if (hit != null && hit < bestDist) {
+                    bestDist = hit
+                    bestHit = node.id to limb
+                }
+            }
+        }
+        return bestHit
+    }
+
+    fun getIkHandleWorldPos(nodeId: String, limb: IkLimb): Vec3? {
+        val cfg = config
+        val node = cfg.scene.nodes.firstOrNull { it.id == nodeId } ?: return null
+        val skel = node.skeleton ?: return null
+        val evaluated = AnimationEvaluator.evaluate(cfg.scene, cfg.scene.timeline.currentFrame)
+        val state = evaluated.nodeStates[nodeId] ?: return null
+        return IkSolver.computeIkHandleWorldPositions(skel, state.worldMatrix, state.boneRotations)[limb]
+    }
+
+    /**
+     * Maps a 2D screen drag offset onto the camera-facing 3D plane passing through [anchorWorld],
+     * giving natural 1:1 finger-to-limb IK manipulation from any orbit angle.
+     */
+    fun projectScreenDragToWorldPoint(anchorWorld: Vec3, deltaX: Float, deltaY: Float): Vec3 {
+        val camPos = lastCameraPos
+        val distToAnchor = (anchorWorld - camPos).length().coerceIn(0.8f, 30f)
+        // Extract camera right & up basis vectors from row 0 & row 1 of column-major view matrix
+        val right = Vec3(lastViewMatrix[0], lastViewMatrix[4], lastViewMatrix[8]).normalized()
+        val up = Vec3(lastViewMatrix[1], lastViewMatrix[5], lastViewMatrix[9]).normalized()
+        val scale = (distToAnchor * 0.85f) / viewportH.coerceAtLeast(1).toFloat()
+        return anchorWorld + right * (deltaX * scale) + up * (-deltaY * scale)
     }
 
     /**
@@ -413,6 +622,8 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         for (node in cfg.scene.nodes) {
             val state = evaluated.nodeStates[node.id] ?: continue
             if (!state.visible) continue
+            // Skip selecting the huge background environment set when clicking near characters
+            if (node.categoryTag == com.example.engine.model.Environment3DFactory.ENV_NODE_TAG) continue
             val localBounds = node.mesh?.computeLocalBounds() ?: Aabb3D(Vec3(-0.35f, -0.35f, -0.35f), Vec3(0.35f, 0.35f, 0.35f))
             val worldMin = Math3D.transformPoint(state.worldMatrix, localBounds.min)
             val worldMax = Math3D.transformPoint(state.worldMatrix, localBounds.max)
@@ -534,10 +745,14 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         cacheKey: String,
         mesh: MeshData,
         worldMatrix: FloatArray,
-        material: com.example.engine.model.MaterialData,
+        material: MaterialData,
         skeleton: SkeletonData?,
         bonePose: Map<String, Vec3>,
-        isSelected: Boolean
+        isSelected: Boolean,
+        ghostAlpha: Float,
+        ghostR: Float,
+        ghostG: Float,
+        ghostB: Float
     ) {
         GLES30.glUseProgram(meshProgram)
         GLES30.glUniformMatrix4fv(uModel, 1, false, worldMatrix, 0)
@@ -553,6 +768,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uRoughness, material.roughness)
         GLES30.glUniform1f(uMetallic, material.metallic)
         GLES30.glUniform1f(uOpacity, material.opacity)
+        GLES30.glUniform1f(uSubsurface, material.subsurface)
         GLES30.glUniform3f(
             uEmissionColor,
             ((emHex shr 16) and 0xFF) / 255f,
@@ -563,8 +779,10 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uUvScale, material.uvScale)
         GLES30.glUniform1i(uIsSelected, if (isSelected) 1 else 0)
         GLES30.glUniform1i(uUseVertexColors, if (mesh.useVertexColors) 1 else 0)
+        GLES30.glUniform3f(uGhostColor, ghostR, ghostG, ghostB)
+        GLES30.glUniform1f(uGhostAlpha, ghostAlpha)
 
-        val texId = material.texturePath?.let { getOrLoadTexture(it) } ?: 0
+        val texId = if (ghostAlpha > 0.001f) 0 else getOrLoadMaterialTexture(material)
         if (texId != 0) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
@@ -700,6 +918,69 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         }
         ptBuf.position(0)
         drawDynamicLines(ptBuf, ptVerts, viewProj, GLES30.GL_POINTS, 12f)
+    }
+
+    /**
+     * Draws glowing 3D octahedral IK target diamonds for Left/Right Hands (Cyan) & Left/Right Feet (Gold).
+     */
+    private fun drawIkHandlesOverlay(
+        skeleton: SkeletonData,
+        worldMatrix: FloatArray,
+        bonePose: Map<String, Vec3>,
+        selectedLimb: IkLimb?,
+        viewProj: FloatArray
+    ) {
+        val handles = IkSolver.computeIkHandleWorldPositions(skeleton, worldMatrix, bonePose)
+        if (handles.isEmpty()) return
+
+        // Each octahedron has 12 edges (24 verts); selected limb draws an extra outer halo (24 more)
+        val lineBuf = ensureDynamicBuffer(handles.size * 48 * 7)
+        var verts = 0
+
+        fun drawOcta(c: Vec3, s: Float, r: Float, g: Float, b: Float, a: Float) {
+            val top = c + Vec3(0f, s, 0f)
+            val bot = c + Vec3(0f, -s, 0f)
+            val px = c + Vec3(s, 0f, 0f)
+            val nx = c + Vec3(-s, 0f, 0f)
+            val pz = c + Vec3(0f, 0f, s)
+            val nz = c + Vec3(0f, 0f, -s)
+            putSeg(lineBuf, top, px, r, g, b, a); putSeg(lineBuf, top, nx, r, g, b, a)
+            putSeg(lineBuf, top, pz, r, g, b, a); putSeg(lineBuf, top, nz, r, g, b, a)
+            putSeg(lineBuf, bot, px, r, g, b, a); putSeg(lineBuf, bot, nx, r, g, b, a)
+            putSeg(lineBuf, bot, pz, r, g, b, a); putSeg(lineBuf, bot, nz, r, g, b, a)
+            putSeg(lineBuf, px, pz, r, g, b, a); putSeg(lineBuf, pz, nx, r, g, b, a)
+            putSeg(lineBuf, nx, nz, r, g, b, a); putSeg(lineBuf, nz, px, r, g, b, a)
+            verts += 24
+        }
+
+        for ((limb, center) in handles) {
+            val isSel = limb == selectedLimb
+            val hex = limb.handleColorHex
+            val r = ((hex shr 16) and 0xFF) / 255f
+            val g = ((hex shr 8) and 0xFF) / 255f
+            val b = (hex and 0xFF) / 255f
+            drawOcta(center, if (isSel) 0.13f else 0.095f, r, g, b, 1.0f)
+            if (isSel) {
+                drawOcta(center, 0.18f, 1.0f, 1.0f, 1.0f, 0.92f)
+            }
+        }
+        lineBuf.position(0)
+        drawDynamicLines(lineBuf, verts, viewProj, GLES30.GL_LINES, 3.4f)
+
+        // Bright center anchor dots
+        val ptBuf = ensureDynamicBuffer(handles.size * 7)
+        var ptCount = 0
+        for ((limb, center) in handles) {
+            val isSel = limb == selectedLimb
+            val hex = limb.handleColorHex
+            val r = if (isSel) 1f else ((hex shr 16) and 0xFF) / 255f
+            val g = if (isSel) 1f else ((hex shr 8) and 0xFF) / 255f
+            val b = if (isSel) 1f else (hex and 0xFF) / 255f
+            ptBuf.put(center.x).put(center.y).put(center.z).put(r).put(g).put(b).put(1f)
+            ptCount++
+        }
+        ptBuf.position(0)
+        drawDynamicLines(ptBuf, ptCount, viewProj, GLES30.GL_POINTS, 18f)
     }
 
     private fun drawHelpersForLightsAndCameras(
@@ -840,11 +1121,29 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
-    private fun getOrLoadTexture(path: String): Int {
+    private fun getOrLoadMaterialTexture(material: MaterialData): Int {
+        material.texturePath?.takeIf { it.isNotBlank() }?.let { path ->
+            val id = getOrLoadTextureFile(path)
+            if (id != 0) return id
+        }
+        val presetName = material.skinPreset ?: return 0
+        val preset = runCatching { SkinPreset.valueOf(presetName) }.getOrNull() ?: return 0
+        if (preset == SkinPreset.NONE) return 0
+        val cacheKey = "skin_preset:${preset.name}"
+        textureCache[cacheKey]?.let { return it }
+        val bmp = SkinTextureGenerator.generateBitmap(preset) ?: return 0
+        return uploadBitmapTexture(cacheKey, bmp)
+    }
+
+    private fun getOrLoadTextureFile(path: String): Int {
         textureCache[path]?.let { return it }
         val file = File(path)
         if (!file.exists()) return 0
         val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return 0
+        return uploadBitmapTexture(path, bmp)
+    }
+
+    private fun uploadBitmapTexture(cacheKey: String, bmp: Bitmap): Int {
         val ids = IntArray(1)
         GLES30.glGenTextures(1, ids, 0)
         val texId = ids[0]
@@ -855,7 +1154,7 @@ class GlSceneRenderer : GLSurfaceView.Renderer {
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_REPEAT)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_REPEAT)
             GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bmp, 0)
-            textureCache[path] = texId
+            textureCache[cacheKey] = texId
         }
         bmp.recycle()
         return texId

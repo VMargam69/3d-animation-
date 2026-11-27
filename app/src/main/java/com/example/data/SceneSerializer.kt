@@ -2,6 +2,7 @@ package com.example.data
 
 import android.util.Base64
 import com.example.engine.model.AnimationClipTrack
+import com.example.engine.model.BackdropPreset
 import com.example.engine.model.BoneNode
 import com.example.engine.model.CameraData
 import com.example.engine.model.CameraPreset
@@ -32,6 +33,7 @@ object SceneSerializer {
         val root = JSONObject().apply {
             put("projectId", doc.projectId)
             put("projectName", doc.projectName)
+            put("backdropPreset", doc.backdropPreset.name)
             put("ambientColor", doc.ambientColor)
             put("ambientIntensity", doc.ambientIntensity.toDouble())
             put("updatedAt", doc.updatedAt)
@@ -179,6 +181,7 @@ object SceneSerializer {
             nodes = nodes,
             timeline = timeline,
             viewportCamera = cam,
+            backdropPreset = runCatching { BackdropPreset.valueOf(root.optString("backdropPreset", "STUDIO_DARK")) }.getOrDefault(BackdropPreset.STUDIO_DARK),
             ambientColor = root.optLong("ambientColor", 0xFF1A2035),
             ambientIntensity = root.optDouble("ambientIntensity", 0.35).toFloat(),
             updatedAt = root.optLong("updatedAt", System.currentTimeMillis())
@@ -210,6 +213,8 @@ object SceneSerializer {
             put("emissionStrength", node.material.emissionStrength.toDouble())
             if (node.material.texturePath != null) put("texturePath", node.material.texturePath)
             put("uvScale", node.material.uvScale.toDouble())
+            put("subsurface", node.material.subsurface.toDouble())
+            if (node.material.skinPreset != null) put("skinPreset", node.material.skinPreset)
         })
         node.mesh?.let { m ->
             put("mesh", JSONObject().apply {
@@ -279,7 +284,9 @@ object SceneSerializer {
                 emissionColor = matObj.optLong("emissionColor", 0xFF000000),
                 emissionStrength = matObj.optDouble("emissionStrength", 0.0).toFloat(),
                 texturePath = if (matObj.has("texturePath")) matObj.optString("texturePath") else null,
-                uvScale = matObj.optDouble("uvScale", 1.0).toFloat()
+                uvScale = matObj.optDouble("uvScale", 1.0).toFloat(),
+                subsurface = matObj.optDouble("subsurface", 0.0).toFloat(),
+                skinPreset = if (matObj.has("skinPreset")) matObj.optString("skinPreset") else null
             )
         } else MaterialData()
 
@@ -388,5 +395,35 @@ object SceneSerializer {
         val raw = Base64.decode(b64, Base64.DEFAULT)
         val bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
         return IntArray(raw.size / 4) { bb.int }
+    }
+
+    fun serializePoseMap(pose: Map<String, Vec3>): String {
+        val sb = StringBuilder("{")
+        var first = true
+        pose.forEach { (boneId, rot) ->
+            if (!first) sb.append(',')
+            first = false
+            val safeKey = boneId.replace("\"", "")
+            sb.append('"').append(safeKey).append("\":[")
+                .append(rot.x).append(',').append(rot.y).append(',').append(rot.z)
+                .append(']')
+        }
+        sb.append('}')
+        return sb.toString()
+    }
+
+    private val POSE_ENTRY_REGEX = Regex("\"([^\"]+)\"\\s*:\\s*\\[\\s*([-+0-9.eE]+)\\s*,\\s*([-+0-9.eE]+)\\s*,\\s*([-+0-9.eE]+)\\s*\\]")
+
+    fun deserializePoseMap(json: String): Map<String, Vec3> {
+        val out = LinkedHashMap<String, Vec3>()
+        if (json.isBlank()) return out
+        POSE_ENTRY_REGEX.findAll(json).forEach { m ->
+            val key = m.groupValues[1]
+            val x = m.groupValues[2].toFloatOrNull() ?: 0f
+            val y = m.groupValues[3].toFloatOrNull() ?: 0f
+            val z = m.groupValues[4].toFloatOrNull() ?: 0f
+            out[key] = Vec3(x, y, z)
+        }
+        return out
     }
 }

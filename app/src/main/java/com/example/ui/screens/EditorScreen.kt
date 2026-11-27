@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -31,16 +31,18 @@ import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.AccountTree
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.Animation
+import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.GridOn
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Landscape
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.MovieCreation
 import androidx.compose.material.icons.rounded.OpenWith
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -54,10 +56,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.LibraryAssetEntity
+import com.example.data.SavedPoseEntity
 import com.example.engine.gl.RenderConfig
 import com.example.engine.gl.ViewportSurface
 import com.example.engine.model.CameraPreset
@@ -88,6 +95,7 @@ import com.example.viewmodel.StudioUiState
 fun EditorScreen(
     state: StudioUiState,
     libraryAssets: List<LibraryAssetEntity>,
+    savedPoses: List<SavedPoseEntity>,
     viewModel: StudioAppViewModel,
     onImportBlenderModel: () -> Unit,
     onPickTextureImage: () -> Unit,
@@ -112,7 +120,10 @@ fun EditorScreen(
         state.transformTool,
         state.transformAxis,
         state.showGrid,
-        state.showSkeleton
+        state.showSkeleton,
+        state.ikEnabled,
+        state.selectedIkLimb,
+        state.showOnionSkin
     ) {
         RenderConfig(
             scene = state.scene,
@@ -126,7 +137,11 @@ fun EditorScreen(
             transformAxis = state.transformAxis,
             showGrid = state.showGrid,
             showSkeleton = state.showSkeleton,
-            showGizmo = true
+            showGizmo = true,
+            ikEnabled = state.ikEnabled,
+            selectedIkLimb = state.selectedIkLimb,
+            showOnionSkin = state.showOnionSkin,
+            onFpsSample = viewModel::updateViewportFps
         )
     }
 
@@ -169,9 +184,11 @@ fun EditorScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (state.isDirty) "Unsaved changes" else "Saved locally",
+                            text = if (state.isDirty) "Unsaved changes • ${state.scene.backdropPreset.label}" else "Saved • ${state.scene.backdropPreset.label}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (state.isDirty) KeyframeAmber else TextMuted
+                            color = if (state.isDirty) KeyframeAmber else TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
@@ -212,7 +229,7 @@ fun EditorScreen(
                     }
                 }
 
-                // Blender-style Mode + Shading + Projection Sub-Bar
+                // Blender-style Mode + Shading (Material / Toon / Solid / Wire) + Projection Sub-Bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -230,12 +247,12 @@ fun EditorScreen(
                                 if (mode == EditorMode.EDIT) viewModel.openInspector(InspectorTab.MODEL)
                                 if (mode == EditorMode.POSE) viewModel.openInspector(InspectorTab.RIG)
                             },
-                            accentColor = ElectricIndigo,
+                            accentColor = if (mode == EditorMode.POSE) StudioCyan else ElectricIndigo,
                             modifier = Modifier.height(28.dp)
                         )
                     }
                     Spacer(Modifier.weight(1f))
-                    // Shading Cycle Pill
+                    // Shading Cycle Pill (Solid -> Material -> Toon -> Wire)
                     Surface(
                         onClick = {
                             val next = ShadingMode.entries[(state.shadingMode.ordinal + 1) % ShadingMode.entries.size]
@@ -243,11 +260,15 @@ fun EditorScreen(
                         },
                         shape = RoundedCornerShape(7.dp),
                         color = SurfaceCard,
-                        border = BorderStroke(1.dp, HairlineBorder),
+                        border = BorderStroke(1.dp, if (state.shadingMode == ShadingMode.TOON) KeyframeAmber else HairlineBorder),
                         modifier = Modifier.height(28.dp).testTag("shading_toggle_button")
                     ) {
                         Box(modifier = Modifier.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-                            Text(state.shadingMode.label, style = MaterialTheme.typography.labelSmall, color = StudioCyan)
+                            Text(
+                                state.shadingMode.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (state.shadingMode == ShadingMode.TOON) KeyframeAmber else StudioCyan
+                            )
                         }
                     }
                     // Perspective / Ortho Toggle
@@ -280,40 +301,79 @@ fun EditorScreen(
 
             Row(modifier = Modifier.fillMaxSize()) {
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    // Genuine OpenGL ES 3.0 Surface
+                    // Genuine OpenGL ES 3.0 Surface with live 3D IK Handle Dragging
                     ViewportSurface(
                         renderConfig = renderConfig,
-                        isPlaying = state.scene.timeline.isPlaying,
+                        isPlaying = state.scene.timeline.isPlaying || state.turntableMode,
                         onOrbit = { dy, dp -> viewModel.orbitCamera(dy, dp) },
                         onPan = { dx, dy -> viewModel.panCamera(dx, dy) },
                         onZoom = { z -> viewModel.zoomCamera(z) },
                         onSelectNodeOrBone = { nId, bId -> viewModel.selectNode(nId, bId) },
+                        onSelectIkLimb = { nId, limb -> viewModel.selectIkLimb(nId, limb) },
+                        onDragIkHandle = { nId, limb, worldPos -> viewModel.solveIkHandleTarget(nId, limb, worldPos) },
                         onDoubleTapFocus = viewModel::focusSelectedObject
                     )
 
-                    // Top-Left HUD Stats Pill
+                    // Optional Safe-Frame & Rule-of-Thirds Cinematic Framing Guide Overlay
+                    if (state.showSafeFrame) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val padX = size.width * 0.08f
+                            val padY = size.height * 0.08f
+                            drawRect(
+                                color = StudioCyan.copy(alpha = 0.45f),
+                                topLeft = Offset(padX, padY),
+                                size = Size(size.width - padX * 2f, size.height - padY * 2f),
+                                style = Stroke(width = 1.5f)
+                            )
+                            val thirdW = size.width / 3f
+                            val thirdH = size.height / 3f
+                            for (i in 1..2) {
+                                drawLine(Color.White.copy(alpha = 0.22f), Offset(thirdW * i, 0f), Offset(thirdW * i, size.height), strokeWidth = 1f)
+                                drawLine(Color.White.copy(alpha = 0.22f), Offset(0f, thirdH * i), Offset(size.width, thirdH * i), strokeWidth = 1f)
+                            }
+                        }
+                    }
+
+                    // Top-Left Pro HUD Stats Pill (Selection + Live FPS + Tri Count + IK Status)
                     Surface(
-                        color = PanelNearBlack.copy(alpha = 0.80f),
+                        color = PanelNearBlack.copy(alpha = 0.82f),
                         shape = RoundedCornerShape(8.dp),
                         border = BorderStroke(1.dp, HairlineBorder),
                         modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
-                            Text(
-                                text = selectedNode?.name ?: "No Selection",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = StudioCyan
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(
+                                    text = selectedNode?.name ?: "No Selection",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = StudioCyan,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Surface(
+                                    color = KeyframeAmber.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        "${state.viewportFps} FPS",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                                        color = KeyframeAmber,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
                             val stats = buildString {
                                 append("${state.scene.nodes.size} objs")
-                                selectedNode?.mesh?.let { append(" • ${it.vertexCount}v/${it.triangleCount}t") }
-                                selectedNode?.skeleton?.let { append(" • ${it.bones.size} bones") }
+                                selectedNode?.mesh?.let { append(" • ${it.triangleCount}t") }
+                                if (state.ikEnabled && selectedNode?.skeleton != null) {
+                                    append(" • IK:${state.selectedIkLimb?.shortLabel ?: "Ready"}")
+                                }
                             }
                             Text(stats, style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = TextSecondary)
                         }
                     }
 
-                    // Top-Right Camera Preset Strip + Overlay Toggles
+                    // Top-Right Camera Preset Strip + Pro Overlay Toggles
                     Column(
                         modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
                         horizontalAlignment = Alignment.End,
@@ -379,14 +439,25 @@ fun EditorScreen(
                                 }
                             }
                             Surface(
-                                onClick = { viewModel.toggleSkeletonOverlay() },
+                                onClick = { viewModel.toggleOnionSkin() },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (state.showSkeleton) ElectricIndigo.copy(alpha = 0.35f) else PanelNearBlack.copy(alpha = 0.85f),
-                                border = BorderStroke(1.dp, HairlineBorder),
-                                modifier = Modifier.size(32.dp)
+                                color = if (state.showOnionSkin) StudioCyan.copy(alpha = 0.32f) else PanelNearBlack.copy(alpha = 0.85f),
+                                border = BorderStroke(1.dp, if (state.showOnionSkin) StudioCyan else HairlineBorder),
+                                modifier = Modifier.size(32.dp).testTag("viewport_onion_skin_toggle")
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.AccessibilityNew, contentDescription = "Toggle skeleton overlay", tint = if (state.showSkeleton) KeyframeAmber else TextMuted, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Rounded.Layers, contentDescription = "Toggle onion skinning", tint = if (state.showOnionSkin) StudioCyan else TextMuted, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            Surface(
+                                onClick = { viewModel.toggleIkMode() },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (state.ikEnabled) KeyframeAmber.copy(alpha = 0.28f) else PanelNearBlack.copy(alpha = 0.85f),
+                                border = BorderStroke(1.dp, if (state.ikEnabled) KeyframeAmber else HairlineBorder),
+                                modifier = Modifier.height(32.dp).testTag("viewport_ik_toggle")
+                            ) {
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 7.dp)) {
+                                    Text("IK", style = MaterialTheme.typography.labelSmall, color = if (state.ikEnabled) KeyframeAmber else TextMuted)
                                 }
                             }
                         }
@@ -398,7 +469,7 @@ fun EditorScreen(
                             visible = state.inspectorOpen,
                             enter = slideInHorizontally { it },
                             exit = slideOutHorizontally { it },
-                            modifier = Modifier.align(Alignment.CenterEnd).width(295.dp)
+                            modifier = Modifier.align(Alignment.CenterEnd).width(300.dp)
                         ) {
                             StudioInspectorPanel(
                                 state = state,
@@ -409,6 +480,10 @@ fun EditorScreen(
                                 onFocusSelected = viewModel::focusSelectedObject,
                                 onDuplicateSelected = viewModel::duplicateSelectedNode,
                                 onDeleteSelected = viewModel::deleteSelectedNode,
+                                onApplyBackdrop = viewModel::applyBackdropAnd3DSet,
+                                onToggleOnionSkin = viewModel::toggleOnionSkin,
+                                onToggleSafeFrame = viewModel::toggleSafeFrame,
+                                onToggleTurntable = viewModel::toggleTurntable,
                                 onUpdateTransform = viewModel::updateSelectedTransform,
                                 onAddPrimitive = viewModel::addPrimitive,
                                 onSetEditorMode = viewModel::setEditorMode,
@@ -420,6 +495,7 @@ fun EditorScreen(
                                 onBevelMesh = viewModel::bevelSelectedMesh,
                                 onSubdivideMesh = viewModel::subdivideSelectedMesh,
                                 onUpdateMaterial = viewModel::updateSelectedMaterial,
+                                onApplySkinPreset = viewModel::applySkinPresetToSelected,
                                 onPickTextureImage = onPickTextureImage,
                                 onAddLight = viewModel::addLight,
                                 onUpdateLight = viewModel::updateSelectedLight,
@@ -432,7 +508,15 @@ fun EditorScreen(
                                 onDeleteBone = viewModel::deleteSelectedBone,
                                 onUpdateBonePose = viewModel::updateSelectedBonePose,
                                 onResetPose = viewModel::resetSelectedSkeletonPose,
-                                onAutoBindWeights = viewModel::autoBindSelectedMesh
+                                onAutoBindWeights = viewModel::autoBindSelectedMesh,
+                                onToggleIkMode = viewModel::toggleIkMode,
+                                onSelectIkLimb = { limb -> viewModel.selectIkLimb(state.selectedNodeId, limb) },
+                                onNudgeIkTarget = viewModel::nudgeSelectedIkTarget,
+                                onSetIkPoleAngle = viewModel::setIkPoleAngle,
+                                onToggleFootPin = viewModel::toggleFootPin,
+                                onKeyIkLimb = viewModel::keyframeSelectedIkLimb,
+                                onMirrorPose = { viewModel.mirrorSelectedPose(insertKeyframes = false) },
+                                onOpenPoseLibrary = { viewModel.openModal(EditorModalSheet.POSE_LIBRARY) }
                             )
                         }
                     }
@@ -449,6 +533,10 @@ fun EditorScreen(
                         onFocusSelected = viewModel::focusSelectedObject,
                         onDuplicateSelected = viewModel::duplicateSelectedNode,
                         onDeleteSelected = viewModel::deleteSelectedNode,
+                        onApplyBackdrop = viewModel::applyBackdropAnd3DSet,
+                        onToggleOnionSkin = viewModel::toggleOnionSkin,
+                        onToggleSafeFrame = viewModel::toggleSafeFrame,
+                        onToggleTurntable = viewModel::toggleTurntable,
                         onUpdateTransform = viewModel::updateSelectedTransform,
                         onAddPrimitive = viewModel::addPrimitive,
                         onSetEditorMode = viewModel::setEditorMode,
@@ -460,6 +548,7 @@ fun EditorScreen(
                         onBevelMesh = viewModel::bevelSelectedMesh,
                         onSubdivideMesh = viewModel::subdivideSelectedMesh,
                         onUpdateMaterial = viewModel::updateSelectedMaterial,
+                        onApplySkinPreset = viewModel::applySkinPresetToSelected,
                         onPickTextureImage = onPickTextureImage,
                         onAddLight = viewModel::addLight,
                         onUpdateLight = viewModel::updateSelectedLight,
@@ -473,7 +562,15 @@ fun EditorScreen(
                         onUpdateBonePose = viewModel::updateSelectedBonePose,
                         onResetPose = viewModel::resetSelectedSkeletonPose,
                         onAutoBindWeights = viewModel::autoBindSelectedMesh,
-                        modifier = Modifier.width(320.dp)
+                        onToggleIkMode = viewModel::toggleIkMode,
+                        onSelectIkLimb = { limb -> viewModel.selectIkLimb(state.selectedNodeId, limb) },
+                        onNudgeIkTarget = viewModel::nudgeSelectedIkTarget,
+                        onSetIkPoleAngle = viewModel::setIkPoleAngle,
+                        onToggleFootPin = viewModel::toggleFootPin,
+                        onKeyIkLimb = viewModel::keyframeSelectedIkLimb,
+                        onMirrorPose = { viewModel.mirrorSelectedPose(insertKeyframes = false) },
+                        onOpenPoseLibrary = { viewModel.openModal(EditorModalSheet.POSE_LIBRARY) },
+                        modifier = Modifier.width(325.dp)
                     )
                 }
             }
@@ -507,6 +604,44 @@ fun EditorScreen(
                 }
                 item {
                     CompactToolButton(
+                        icon = Icons.Rounded.Bookmarks,
+                        label = "Poses",
+                        selected = state.activeModal == EditorModalSheet.POSE_LIBRARY,
+                        accent = StudioCyan,
+                        onClick = { viewModel.openModal(EditorModalSheet.POSE_LIBRARY) },
+                        modifier = Modifier.testTag("toolbar_poses_button")
+                    )
+                }
+                item {
+                    CompactToolButton(
+                        icon = Icons.Rounded.Landscape,
+                        label = "3D BG",
+                        selected = state.inspectorOpen && state.inspectorTab == InspectorTab.WORLD,
+                        accent = StudioCyan,
+                        onClick = { viewModel.openInspector(InspectorTab.WORLD) },
+                        modifier = Modifier.testTag("toolbar_world_bg_button")
+                    )
+                }
+                item {
+                    CompactToolButton(
+                        icon = Icons.Rounded.AccessibilityNew,
+                        label = "Rig/IK",
+                        selected = state.inspectorOpen && state.inspectorTab == InspectorTab.RIG,
+                        accent = StudioCyan,
+                        onClick = { viewModel.openInspector(InspectorTab.RIG) },
+                        modifier = Modifier.testTag("toolbar_rig_ik_button")
+                    )
+                }
+                item {
+                    CompactToolButton(
+                        icon = Icons.Rounded.Palette,
+                        label = "Skin/Mat",
+                        selected = state.inspectorOpen && state.inspectorTab == InspectorTab.MATERIAL,
+                        onClick = { viewModel.openInspector(InspectorTab.MATERIAL) }
+                    )
+                }
+                item {
+                    CompactToolButton(
                         icon = Icons.Rounded.AddBox,
                         label = "Add 3D",
                         onClick = { viewModel.openModal(EditorModalSheet.ADD_PRIMITIVE) },
@@ -531,26 +666,10 @@ fun EditorScreen(
                 }
                 item {
                     CompactToolButton(
-                        icon = Icons.Rounded.Palette,
-                        label = "Material",
-                        selected = state.inspectorOpen && state.inspectorTab == InspectorTab.MATERIAL,
-                        onClick = { viewModel.openInspector(InspectorTab.MATERIAL) }
-                    )
-                }
-                item {
-                    CompactToolButton(
                         icon = Icons.Rounded.Lightbulb,
                         label = "Lights",
                         selected = state.inspectorOpen && state.inspectorTab == InspectorTab.LIGHT_CAM,
                         onClick = { viewModel.openInspector(InspectorTab.LIGHT_CAM) }
-                    )
-                }
-                item {
-                    CompactToolButton(
-                        icon = Icons.Rounded.AccessibilityNew,
-                        label = "Rig",
-                        selected = state.inspectorOpen && state.inspectorTab == InspectorTab.RIG,
-                        onClick = { viewModel.openInspector(InspectorTab.RIG) }
                     )
                 }
                 item {
@@ -589,6 +708,8 @@ fun EditorScreen(
             onPasteKeyframe = viewModel::pasteKeyframeAtPlayhead,
             onDeleteKeyframe = viewModel::deleteSelectedKeyframe,
             onMoveSelectedKeyframe = viewModel::moveSelectedKeyframe,
+            onUpdateKeyframeInterpolation = viewModel::updateSelectedKeyframeInterpolation,
+            onOpenPoseLibrary = { viewModel.openModal(EditorModalSheet.POSE_LIBRARY) },
             onToggleTrackVisibility = viewModel::toggleTrackVisibility,
             onToggleTrackLock = viewModel::toggleTrackLock,
             onSelectNode = { viewModel.selectNode(it) },
@@ -630,6 +751,26 @@ fun EditorScreen(
                 containerColor = CharcoalCanvas
             ) {
                 AnimationLibraryPanel(onApplyPreset = viewModel::applyAnimationPresetToSelected)
+            }
+        }
+        EditorModalSheet.POSE_LIBRARY -> {
+            ModalBottomSheet(
+                onDismissRequest = { viewModel.closeModal() },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = CharcoalCanvas
+            ) {
+                PoseLibrarySheet(
+                    poses = savedPoses,
+                    currentFrame = state.scene.timeline.currentFrame.toInt(),
+                    poseBlendWeight = state.poseBlendWeight,
+                    onChangeBlendWeight = viewModel::setPoseBlendWeight,
+                    onSaveCurrentPose = viewModel::saveCurrentPoseToLibrary,
+                    onApplyPose = { pose, weight, insertKey ->
+                        viewModel.applySavedPose(pose, weight, insertKey)
+                    },
+                    onMirrorPose = { viewModel.mirrorSelectedPose(insertKeyframes = false) },
+                    onDeletePose = viewModel::deleteSavedPose
+                )
             }
         }
         EditorModalSheet.ADD_PRIMITIVE -> {

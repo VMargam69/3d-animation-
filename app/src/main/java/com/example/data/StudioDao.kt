@@ -46,4 +46,20 @@ interface StudioDao {
 
     @Query("DELETE FROM library_assets WHERE id = :id")
     suspend fun deleteAssetById(id: String)
+
+    // --- Saved Pose Library ---
+    @Query("SELECT * FROM saved_poses ORDER BY isBuiltIn ASC, createdAt DESC")
+    fun observeSavedPoses(): Flow<List<SavedPoseEntity>>
+
+    @Query("SELECT id FROM saved_poses")
+    suspend fun getAllSavedPoseIds(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSavedPose(pose: SavedPoseEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSavedPoses(poses: List<SavedPoseEntity>)
+
+    @Query("DELETE FROM saved_poses WHERE id = :id")
+    suspend fun deleteSavedPoseById(id: String)
 }

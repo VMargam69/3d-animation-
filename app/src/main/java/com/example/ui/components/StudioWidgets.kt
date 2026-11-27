@@ -397,28 +397,26 @@ fun BlenderWorkflowGuideDialog(onDismiss: () -> Unit) {
         titleContentColor = TextPrimary,
         textContentColor = TextSecondary,
         icon = { Icon(Icons.Rounded.Info, contentDescription = null, tint = StudioCyan) },
-        title = { Text("Blender to DraftRig 3D Workflow", style = MaterialTheme.typography.titleMedium) },
+        title = { Text("Blender & Multi-Format 3D Pipeline", style = MaterialTheme.typography.titleMedium) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "DraftRig 3D natively imports .glb, .gltf, .obj, and .stl completely offline. Because .blend stores desktop C-memory structs, export from Blender as glTF 2.0 (.glb) for best fidelity:",
+                    "DraftRig 3D natively imports and exports all major Blender & 3D studio formats 100% offline with automatic mobile LOD optimization:",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
                 val steps = listOf(
-                    "1. In Blender, select your character mesh + armature rig.",
-                    "2. Open File -> Export -> glTF 2.0 (.glb / .gltf).",
-                    "3. Set Format to 'glTF Binary (.glb)' to embed textures.",
-                    "4. Under Data -> Mesh: enable UVs, Normals, Apply Modifiers.",
-                    "5. Under Animation: enable Skinning & Include All Bone Influences.",
-                    "6. Copy the .glb to your Android device & tap Import 3D Model."
+                    "• Direct Import: .glb, .gltf, .obj (+ .mtl), .fbx (ASCII & Binary), .stl, .ply, .dae (Collada).",
+                    "• ZIP Skin Bundles (.fbm.zip / .zip): Auto-extracts mesh + skin textures and binds them to your character.",
+                    "• Native .blend Inspector: Reads Blender DNA headers & mesh blocks; for full rigs/textures, export .glb or .fbx from Blender.",
+                    "• Direct Export: Render MP4 video or export posed 3D scenes to .glb, .obj, .fbx, .stl, .ply, or .dae."
                 )
                 Surface(
                     color = CharcoalCanvas,
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, HairlineBorder)
                 ) {
-                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         steps.forEach { s ->
                             Text(s, style = MaterialTheme.typography.bodySmall, color = TextPrimary)
                         }

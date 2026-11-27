@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -26,7 +28,10 @@ import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Flip
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Landscape
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.ViewInAr
@@ -48,12 +53,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.engine.model.BackdropPreset
 import com.example.engine.model.CameraData
 import com.example.engine.model.EditSubMode
 import com.example.engine.model.EditorMode
+import com.example.engine.model.IkLimb
 import com.example.engine.model.LightData
 import com.example.engine.model.LightType
 import com.example.engine.model.MaterialData
@@ -61,6 +71,7 @@ import com.example.engine.model.NodeType
 import com.example.engine.model.PrimitiveKind
 import com.example.engine.model.SceneDocument
 import com.example.engine.model.SceneNode
+import com.example.engine.model.SkinPreset
 import com.example.engine.model.Transform3D
 import com.example.engine.model.Vec3
 import com.example.ui.components.AxisSliderRow
@@ -91,6 +102,10 @@ fun StudioInspectorPanel(
     onFocusSelected: () -> Unit,
     onDuplicateSelected: () -> Unit,
     onDeleteSelected: () -> Unit,
+    onApplyBackdrop: (BackdropPreset, Boolean) -> Unit,
+    onToggleOnionSkin: () -> Unit,
+    onToggleSafeFrame: () -> Unit,
+    onToggleTurntable: () -> Unit,
     onUpdateTransform: (Transform3D) -> Unit,
     onAddPrimitive: (PrimitiveKind) -> Unit,
     onSetEditorMode: (EditorMode) -> Unit,
@@ -102,6 +117,7 @@ fun StudioInspectorPanel(
     onBevelMesh: () -> Unit,
     onSubdivideMesh: () -> Unit,
     onUpdateMaterial: (MaterialData) -> Unit,
+    onApplySkinPreset: (SkinPreset) -> Unit,
     onPickTextureImage: () -> Unit,
     onAddLight: (LightType) -> Unit,
     onUpdateLight: (LightData) -> Unit,
@@ -115,6 +131,14 @@ fun StudioInspectorPanel(
     onUpdateBonePose: (Vec3, Float?) -> Unit,
     onResetPose: () -> Unit,
     onAutoBindWeights: () -> Unit,
+    onToggleIkMode: () -> Unit,
+    onSelectIkLimb: (IkLimb) -> Unit,
+    onNudgeIkTarget: (Vec3) -> Unit,
+    onSetIkPoleAngle: (Float) -> Unit,
+    onToggleFootPin: () -> Unit,
+    onKeyIkLimb: () -> Unit,
+    onMirrorPose: () -> Unit,
+    onOpenPoseLibrary: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val selectedNode = state.scene.nodes.firstOrNull { it.id == state.selectedNodeId }
@@ -161,7 +185,7 @@ fun StudioInspectorPanel(
                         label = tab.label,
                         selected = state.inspectorTab == tab,
                         onClick = { onSelectTab(tab) },
-                        accentColor = ElectricIndigo
+                        accentColor = if (tab == InspectorTab.WORLD || tab == InspectorTab.RIG) StudioCyan else ElectricIndigo
                     )
                 }
             }
@@ -184,6 +208,16 @@ fun StudioInspectorPanel(
                         onFocusSelected = onFocusSelected,
                         onDuplicateSelected = onDuplicateSelected,
                         onDeleteSelected = onDeleteSelected
+                    )
+                    InspectorTab.WORLD -> World3DInspectorContent(
+                        currentBackdrop = state.scene.backdropPreset,
+                        showOnionSkin = state.showOnionSkin,
+                        showSafeFrame = state.showSafeFrame,
+                        turntableMode = state.turntableMode,
+                        onApplyBackdrop = onApplyBackdrop,
+                        onToggleOnionSkin = onToggleOnionSkin,
+                        onToggleSafeFrame = onToggleSafeFrame,
+                        onToggleTurntable = onToggleTurntable
                     )
                     InspectorTab.TRANSFORM -> TransformInspectorContent(
                         node = selectedNode,
@@ -209,6 +243,7 @@ fun StudioInspectorPanel(
                     InspectorTab.MATERIAL -> MaterialInspectorContent(
                         node = selectedNode,
                         onUpdateMaterial = onUpdateMaterial,
+                        onApplySkinPreset = onApplySkinPreset,
                         onPickTextureImage = onPickTextureImage
                     )
                     InspectorTab.LIGHT_CAM -> LightCameraInspectorContent(
@@ -221,6 +256,10 @@ fun StudioInspectorPanel(
                     InspectorTab.RIG -> RiggingInspectorContent(
                         node = selectedNode,
                         selectedBoneId = state.selectedBoneId,
+                        ikEnabled = state.ikEnabled,
+                        selectedIkLimb = state.selectedIkLimb,
+                        ikPoleAngle = state.ikPoleAngle,
+                        footPinEnabled = state.footPinEnabled,
                         onAttachHumanoidRig = onAttachHumanoidRig,
                         onSelectBone = onSelectBone,
                         onAddChildBone = onAddChildBone,
@@ -228,11 +267,110 @@ fun StudioInspectorPanel(
                         onDeleteBone = onDeleteBone,
                         onUpdateBonePose = onUpdateBonePose,
                         onResetPose = onResetPose,
-                        onAutoBindWeights = onAutoBindWeights
+                        onAutoBindWeights = onAutoBindWeights,
+                        onToggleIkMode = onToggleIkMode,
+                        onSelectIkLimb = onSelectIkLimb,
+                        onNudgeIkTarget = onNudgeIkTarget,
+                        onSetIkPoleAngle = onSetIkPoleAngle,
+                        onToggleFootPin = onToggleFootPin,
+                        onKeyIkLimb = onKeyIkLimb,
+                        onMirrorPose = onMirrorPose,
+                        onOpenPoseLibrary = onOpenPoseLibrary
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun World3DInspectorContent(
+    currentBackdrop: BackdropPreset,
+    showOnionSkin: Boolean,
+    showSafeFrame: Boolean,
+    turntableMode: Boolean,
+    onApplyBackdrop: (BackdropPreset, Boolean) -> Unit,
+    onToggleOnionSkin: () -> Unit,
+    onToggleSafeFrame: () -> Unit,
+    onToggleTurntable: () -> Unit
+) {
+    var include3DProps by remember { mutableStateOf(true) }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(Icons.Rounded.Landscape, contentDescription = null, tint = StudioCyan, modifier = Modifier.size(18.dp))
+        Text("3D Background Worlds", style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("Load 3D Set & Stage Lights", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        Switch(checked = include3DProps, onCheckedChange = { include3DProps = it })
+    }
+
+    BackdropPreset.entries.chunked(2).forEach { pair ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            pair.forEach { preset ->
+                val isSel = preset == currentBackdrop
+                Surface(
+                    onClick = { onApplyBackdrop(preset, include3DProps) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = SurfaceCard,
+                    border = BorderStroke(if (isSel) 1.6.dp else 1.dp, if (isSel) StudioCyan else HairlineBorder),
+                    modifier = Modifier.weight(1f).testTag("world_preset_${preset.name}")
+                ) {
+                    Column {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(36.dp)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color(preset.zenithHex), Color(preset.horizonHex), Color(preset.groundHex))
+                                    )
+                                )
+                        )
+                        Text(
+                            text = preset.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSel) StudioCyan else TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalDivider(color = HairlineBorder)
+    Text("Pro Viewport Tools", style = MaterialTheme.typography.titleSmall, color = KeyframeAmber)
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Onion Skinning Ghosts", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+            Text("Shows -6F cyan & +6F amber pose silhouettes", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+        }
+        Switch(checked = showOnionSkin, onCheckedChange = { onToggleOnionSkin() })
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Safe Frame & Rule of Thirds", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+            Text("Camera framing guides for 16:9 / reels", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+        }
+        Switch(checked = showSafeFrame, onCheckedChange = { onToggleSafeFrame() })
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("360° Turntable Showcase", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+            Text("Smooth auto-orbit around subject", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+        }
+        Switch(checked = turntableMode, onCheckedChange = { onToggleTurntable() })
     }
 }
 
@@ -438,16 +576,37 @@ private fun ModelingInspectorContent(
 private fun MaterialInspectorContent(
     node: SceneNode?,
     onUpdateMaterial: (MaterialData) -> Unit,
+    onApplySkinPreset: (SkinPreset) -> Unit,
     onPickTextureImage: () -> Unit
 ) {
     if (node == null) {
-        Text("Select a 3D mesh to edit its PBR material and texture.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        Text("Select a 3D mesh or character to edit its Skin shader, PBR material, and texture.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
         return
     }
     val mat = node.material
-    Text("Base Color", style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+
+    // Pro Skin & Surface Shaders
+    Text("Skin & Surface Presets (GPU)", style = MaterialTheme.typography.titleSmall, color = StudioCyan)
+    SkinPreset.entries.chunked(2).forEach { pair ->
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            pair.forEach { preset ->
+                val active = (mat.skinPreset == null && preset == SkinPreset.NONE) || mat.skinPreset == preset.name
+                StudioFilterChip(
+                    label = preset.label,
+                    selected = active,
+                    onClick = { onApplySkinPreset(preset) },
+                    accentColor = StudioCyan,
+                    modifier = Modifier.weight(1f).height(30.dp)
+                )
+            }
+        }
+    }
+
+    HorizontalDivider(color = HairlineBorder)
+    Text("Base Color & PBR Shading", style = MaterialTheme.typography.titleSmall, color = TextPrimary)
     ColorSwatchGrid(selectedHex = mat.baseColor, onSelect = { onUpdateMaterial(mat.copy(baseColor = it)) })
 
+    AxisSliderRow("SS", mat.subsurface, 0f..1f, { onUpdateMaterial(mat.copy(subsurface = it)) }, axisColor = KeyframeAmber)
     AxisSliderRow("Rg", mat.roughness, 0.05f..1f, { onUpdateMaterial(mat.copy(roughness = it)) })
     AxisSliderRow("Mt", mat.metallic, 0f..1f, { onUpdateMaterial(mat.copy(metallic = it)) })
     AxisSliderRow("Op", mat.opacity, 0.15f..1f, { onUpdateMaterial(mat.copy(opacity = it)) })
@@ -465,11 +624,11 @@ private fun MaterialInspectorContent(
         ) {
             Icon(Icons.Rounded.Image, null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Local Texture")
+            Text("Custom Skin Map")
         }
-        if (mat.texturePath != null) {
+        if (mat.texturePath != null || mat.skinPreset != null) {
             OutlinedButton(
-                onClick = { onUpdateMaterial(mat.copy(texturePath = null)) },
+                onClick = { onUpdateMaterial(mat.copy(texturePath = null, skinPreset = null)) },
                 border = BorderStroke(1.dp, DangerRed)
             ) { Text("Clear", color = DangerRed) }
         }
@@ -538,6 +697,10 @@ private fun LightCameraInspectorContent(
 private fun RiggingInspectorContent(
     node: SceneNode?,
     selectedBoneId: String?,
+    ikEnabled: Boolean,
+    selectedIkLimb: IkLimb?,
+    ikPoleAngle: Float,
+    footPinEnabled: Boolean,
     onAttachHumanoidRig: () -> Unit,
     onSelectBone: (String) -> Unit,
     onAddChildBone: (String) -> Unit,
@@ -545,10 +708,18 @@ private fun RiggingInspectorContent(
     onDeleteBone: () -> Unit,
     onUpdateBonePose: (Vec3, Float?) -> Unit,
     onResetPose: () -> Unit,
-    onAutoBindWeights: () -> Unit
+    onAutoBindWeights: () -> Unit,
+    onToggleIkMode: () -> Unit,
+    onSelectIkLimb: (IkLimb) -> Unit,
+    onNudgeIkTarget: (Vec3) -> Unit,
+    onSetIkPoleAngle: (Float) -> Unit,
+    onToggleFootPin: () -> Unit,
+    onKeyIkLimb: () -> Unit,
+    onMirrorPose: () -> Unit,
+    onOpenPoseLibrary: () -> Unit
 ) {
     if (node == null) {
-        Text("Select a 3D character or mesh to rig and pose its skeleton.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        Text("Select a 3D character or mesh to rig, drag IK handles, and pose its skeleton.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
         return
     }
     val skel = node.skeleton
@@ -558,7 +729,7 @@ private fun RiggingInspectorContent(
             onClick = onAttachHumanoidRig,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo)
-        ) { Text("Attach 11-Bone Humanoid Rig") }
+        ) { Text("Attach 11-Bone Humanoid IK Rig") }
         OutlinedButton(
             onClick = { onAddChildBone("RootBone") },
             modifier = Modifier.fillMaxWidth(),
@@ -567,7 +738,135 @@ private fun RiggingInspectorContent(
         return
     }
 
-    Text("Armature Hierarchy (${skel.bones.size} Bones)", style = MaterialTheme.typography.titleSmall, color = StudioCyan)
+    // Pro Inverse Kinematics (IK) Handles Control Card
+    Surface(
+        color = SurfaceCard,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().testTag("ik_control_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("IK Handles", style = MaterialTheme.typography.titleSmall, color = StudioCyan)
+                    Surface(
+                        color = KeyframeAmber.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(5.dp),
+                        border = BorderStroke(1.dp, KeyframeAmber.copy(alpha = 0.5f))
+                    ) {
+                        Text("PRO", style = MaterialTheme.typography.labelSmall, color = KeyframeAmber, modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                    }
+                }
+                Switch(checked = ikEnabled, onCheckedChange = { onToggleIkMode() })
+            }
+
+            if (ikEnabled) {
+                Text(
+                    "Drag cyan (hand) or gold (foot) diamonds directly in the 3D viewport, or nudge target below:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+
+                // 4 Limb Selector Buttons
+                IkLimb.entries.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        pair.forEach { limb ->
+                            val active = selectedIkLimb == limb
+                            val dotColor = Color(limb.handleColorHex)
+                            Surface(
+                                onClick = { onSelectIkLimb(limb) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (active) dotColor.copy(alpha = 0.24f) else CharcoalCanvas,
+                                border = BorderStroke(1.dp, if (active) dotColor else HairlineBorder),
+                                modifier = Modifier.weight(1f).height(34.dp).testTag("ik_limb_${limb.name}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+                                    Text(limb.shortLabel, style = MaterialTheme.typography.labelSmall, color = TextPrimary, maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Precision 3D IK Target Nudge Pad
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(-0.14f, 0f, 0f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("-X", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(0.14f, 0f, 0f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("+X", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(0f, -0.14f, 0f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("-Y", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(0f, 0.14f, 0f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("+Y", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(0f, 0f, -0.14f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("-Z", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                    OutlinedButton(onClick = { onNudgeIkTarget(Vec3(0f, 0f, 0.14f)) }, modifier = Modifier.weight(1f).height(34.dp), contentPadding = PaddingValues(0.dp), border = BorderStroke(1.dp, HairlineBorder)) {
+                        Text("+Z", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+
+                AxisSliderRow("Pl", ikPoleAngle, -90f..90f, onSetIkPoleAngle, axisColor = StudioCyan, unit = "°")
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Text("Pin Feet Above Floor", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                    Switch(checked = footPinEnabled, onCheckedChange = { onToggleFootPin() })
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = onKeyIkLimb,
+                        modifier = Modifier.weight(1f).height(36.dp).testTag("ik_key_limb_button"),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo)
+                    ) {
+                        Icon(Icons.Rounded.Key, null, tint = KeyframeAmber, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Key IK Limb", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = onMirrorPose,
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        border = BorderStroke(1.dp, StudioCyan)
+                    ) {
+                        Icon(Icons.Rounded.Flip, null, tint = StudioCyan, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Mirror", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+            }
+
+            Button(
+                onClick = onOpenPoseLibrary,
+                modifier = Modifier.fillMaxWidth().height(38.dp).testTag("rig_open_pose_library_button"),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo)
+            ) {
+                Icon(Icons.Rounded.AccessibilityNew, null, tint = StudioCyan, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Open Pose Library (Save & Reuse)", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+
+    HorizontalDivider(color = HairlineBorder)
+    Text("FK Armature Hierarchy (${skel.bones.size} Bones)", style = MaterialTheme.typography.titleSmall, color = StudioCyan)
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         items(skel.bones, key = { it.id }) { b ->
             StudioFilterChip(b.name, b.id == selectedBoneId, { onSelectBone(b.id) }, accentColor = StudioCyan)
@@ -588,7 +887,7 @@ private fun RiggingInspectorContent(
         modifier = Modifier.fillMaxWidth()
     )
 
-    Text("Bone Pose Rotation", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+    Text("FK Bone Rotation", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
     AxisSliderRow("X", selBone.poseRotation.x, -160f..160f, { onUpdateBonePose(selBone.poseRotation.copy(x = it), null) }, unit = "°")
     AxisSliderRow("Y", selBone.poseRotation.y, -160f..160f, { onUpdateBonePose(selBone.poseRotation.copy(y = it), null) }, unit = "°")
     AxisSliderRow("Z", selBone.poseRotation.z, -160f..160f, { onUpdateBonePose(selBone.poseRotation.copy(z = it), null) }, unit = "°")

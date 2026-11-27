@@ -39,3 +39,15 @@ data class LibraryAssetEntity(
     val serializedNodePath: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "saved_poses")
+data class SavedPoseEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val category: String,          // Core, Action, Social, Dance, Combat, Custom
+    val poseJson: String,          // JSON map of boneId -> [rx, ry, rz]
+    val boneCount: Int,
+    val isBuiltIn: Boolean = false,
+    val accentHex: Long = 0xFF22D3EE,
+    val createdAt: Long = System.currentTimeMillis()
+)

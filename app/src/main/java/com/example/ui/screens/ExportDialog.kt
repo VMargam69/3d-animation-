@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.MovieCreation
@@ -46,6 +48,7 @@ import com.example.ui.theme.SurfaceCard
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.viewmodel.ExportUiState
+import java.util.Locale
 
 @Composable
 fun ExportStudioDialog(
@@ -63,22 +66,31 @@ fun ExportStudioDialog(
         containerColor = PanelNearBlack,
         titleContentColor = TextPrimary,
         icon = { Icon(Icons.Rounded.MovieCreation, contentDescription = null, tint = StudioCyan) },
-        title = { Text("Offline Local Render & Export", style = MaterialTheme.typography.titleMedium) },
+        title = { Text("Pro Offline Render & 3D Export", style = MaterialTheme.typography.titleMedium) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Format", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ExportFormat.entries.forEach { fmt ->
-                        StudioFilterChip(
-                            label = fmt.label,
-                            selected = state.format == fmt,
-                            onClick = {
-                                if (!state.isExporting) {
-                                    onUpdateConfig(fmt, state.resolution, state.fps, state.startFrame, state.endFrame, state.quality)
-                                }
-                            },
-                            modifier = Modifier.weight(1f).testTag("export_format_${fmt.name}")
-                        )
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Export Format (Video & All Blender 3D Formats)", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                ExportFormat.entries.chunked(3).forEach { rowFmts ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        rowFmts.forEach { fmt ->
+                            StudioFilterChip(
+                                label = fmt.extension.uppercase(),
+                                selected = state.format == fmt,
+                                onClick = {
+                                    if (!state.isExporting) {
+                                        onUpdateConfig(fmt, state.resolution, state.fps, state.startFrame, state.endFrame, state.quality)
+                                    }
+                                },
+                                accentColor = if (fmt == ExportFormat.MP4) ElectricIndigo else StudioCyan,
+                                modifier = Modifier.weight(1f).testTag("export_format_${fmt.name}")
+                            )
+                        }
+                        repeat(3 - rowFmts.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
 
@@ -144,18 +156,34 @@ fun ExportStudioDialog(
                         ) {
                             Text("Range: F${state.startFrame} → F${state.endFrame.coerceAtMost(totalFrames)}", style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily), color = TextPrimary)
                             Text(
-                                String.format("%.1fs", (state.endFrame - state.startFrame).coerceAtLeast(1) / state.fps.toFloat()),
+                                String.format(Locale.US, "%.1fs", (state.endFrame - state.startFrame).coerceAtLeast(1) / state.fps.toFloat()),
                                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
                                 color = StudioCyan
                             )
                         }
                     }
                 } else {
-                    Text(
-                        "Exports the current 3D scene geometry, normals, UVs, and PBR materials as a standard glTF 2.0 binary (.glb) compatible with Blender.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
+                    val formatDesc = when (state.format) {
+                        ExportFormat.GLB -> "glTF 2.0 Binary (.glb) — Industry-standard Blender/Unity/Godot interchange with posed meshes, normals, UVs & PBR materials."
+                        ExportFormat.OBJ -> "Wavefront OBJ (.obj + companion .mtl) — Universal Blender, Maya & ZBrush mesh format with posed geometry & material library."
+                        ExportFormat.FBX -> "Autodesk FBX 7.4 ASCII (.fbx) — Direct Blender & Unreal Engine import preserving posed meshes, normals, UVs & material colors."
+                        ExportFormat.STL -> "Binary STL (.stl) — Solid watertight triangle mesh ideal for 3D printing slicers and CAD workflows."
+                        ExportFormat.PLY -> "Stanford PLY (.ply) — High-precision vertex-colored 3D mesh with full per-vertex RGB skin & costume colors."
+                        ExportFormat.DAE -> "Collada XML (.dae) — Open-standard Blender & game-engine interchange with geometry, normals & UVs."
+                        ExportFormat.MP4 -> ""
+                    }
+                    Surface(
+                        color = SurfaceCard,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, HairlineBorder)
+                    ) {
+                        Text(
+                            text = formatDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
                 }
 
                 if (state.isExporting) {
@@ -167,7 +195,7 @@ fun ExportStudioDialog(
                             trackColor = HairlineBorder
                         )
                         Text(
-                            text = "Rendering locally on GPU... ${(state.progress * 100).toInt()}%",
+                            text = "Exporting locally... ${(state.progress * 100).toInt()}%",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
                             color = StudioCyan
                         )
@@ -192,7 +220,7 @@ fun ExportStudioDialog(
                             OutlinedButton(
                                 onClick = {
                                     val share = Intent(Intent.ACTION_SEND).apply {
-                                        type = if (state.format == ExportFormat.MP4) "video/mp4" else "model/gltf-binary"
+                                        type = state.format.mimeType
                                         putExtra(Intent.EXTRA_STREAM, state.completedUri)
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
@@ -203,7 +231,7 @@ fun ExportStudioDialog(
                             ) {
                                 Icon(Icons.Rounded.Share, contentDescription = null, tint = StudioCyan)
                                 Spacer(Modifier.width(6.dp))
-                                Text("Share to Social / Apps", color = TextPrimary)
+                                Text("Share to Blender / Apps", color = TextPrimary)
                             }
                         }
                     }
@@ -212,14 +240,17 @@ fun ExportStudioDialog(
         },
         confirmButton = {
             if (state.isExporting) {
-                TextButton(onClick = onCancelExport) { Text("Cancel Render", color = DangerRed) }
+                TextButton(onClick = onCancelExport) { Text("Cancel Export", color = DangerRed) }
             } else {
                 Button(
                     onClick = onStartExport,
                     modifier = Modifier.testTag("start_export_button"),
                     colors = ButtonDefaults.buttonColors(containerColor = ElectricIndigo)
                 ) {
-                    Text(if (state.format == ExportFormat.MP4) "Render MP4" else "Export GLB")
+                    Text(
+                        if (state.format == ExportFormat.MP4) "Render MP4"
+                        else "Export .${state.format.extension.uppercase()}"
+                    )
                 }
             }
         },

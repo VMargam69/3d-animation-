@@ -1,12 +1,12 @@
 package com.example.viewmodel
 
 import android.net.Uri
-import com.example.engine.model.CameraPreset
 import com.example.engine.model.CharacterBuildSpec
 import com.example.engine.model.EditSubMode
 import com.example.engine.model.EditorMode
 import com.example.engine.model.ExportFormat
 import com.example.engine.model.ExportResolution
+import com.example.engine.model.IkLimb
 import com.example.engine.model.ImportInspectionReport
 import com.example.engine.model.Keyframe
 import com.example.engine.model.RenderQuality
@@ -29,17 +29,19 @@ enum class HubTab(val label: String) {
 
 enum class InspectorTab(val label: String) {
     OUTLINER("Scene"),
+    WORLD("World 3D"),
     TRANSFORM("Transform"),
     MODEL("Model"),
-    MATERIAL("Material"),
+    MATERIAL("Skin / Mat"),
     LIGHT_CAM("Light/Cam"),
-    RIG("Rig / Pose")
+    RIG("Rig / IK")
 }
 
 enum class EditorModalSheet {
     NONE,
     CHARACTER_LIBRARY,
     ANIMATION_LIBRARY,
+    POSE_LIBRARY,
     ADD_PRIMITIVE,
     EXPORT,
     BLENDER_GUIDE
@@ -75,6 +77,15 @@ data class StudioUiState(
     val transformAxis: TransformAxis = TransformAxis.ALL,
     val showGrid: Boolean = true,
     val showSkeleton: Boolean = true,
+    val ikEnabled: Boolean = true,
+    val selectedIkLimb: IkLimb? = IkLimb.RIGHT_HAND,
+    val ikPoleAngle: Float = 0f,
+    val footPinEnabled: Boolean = false,
+    val showOnionSkin: Boolean = false,
+    val showSafeFrame: Boolean = false,
+    val turntableMode: Boolean = false,
+    val viewportFps: Int = 60,
+    val poseBlendWeight: Float = 1.0f,
     val inspectorOpen: Boolean = false,
     val inspectorTab: InspectorTab = InspectorTab.TRANSFORM,
     val activeModal: EditorModalSheet = EditorModalSheet.NONE,

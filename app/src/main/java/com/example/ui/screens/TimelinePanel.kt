@@ -66,7 +66,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.rounded.AccessibilityNew
 import com.example.engine.model.AnimationClipTrack
+import com.example.engine.model.InterpolationType
 import com.example.engine.model.Keyframe
 import com.example.engine.model.SceneDocument
 import com.example.engine.model.SceneNode
@@ -104,6 +106,8 @@ fun BottomTimelinePanel(
     onPasteKeyframe: () -> Unit,
     onDeleteKeyframe: () -> Unit,
     onMoveSelectedKeyframe: (Int) -> Unit,
+    onUpdateKeyframeInterpolation: (InterpolationType) -> Unit,
+    onOpenPoseLibrary: () -> Unit,
     onToggleTrackVisibility: (String) -> Unit,
     onToggleTrackLock: (String) -> Unit,
     onSelectNode: (String) -> Unit,
@@ -212,6 +216,24 @@ fun BottomTimelinePanel(
                     )
                 }
 
+                // Pose Library quick trigger right on the Timeline
+                Surface(
+                    onClick = onOpenPoseLibrary,
+                    shape = RoundedCornerShape(8.dp),
+                    color = ElectricIndigo.copy(alpha = 0.24f),
+                    border = BorderStroke(1.dp, StudioCyan.copy(alpha = 0.6f)),
+                    modifier = Modifier.height(30.dp).testTag("timeline_pose_library_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(Icons.Rounded.AccessibilityNew, contentDescription = "Pose Library", tint = StudioCyan, modifier = Modifier.size(14.dp))
+                        Text("Poses", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+
                 // Insert Keyframe button
                 Surface(
                     onClick = onInsertKeyframe,
@@ -221,7 +243,7 @@ fun BottomTimelinePanel(
                     modifier = Modifier.height(30.dp).testTag("timeline_add_keyframe_button")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 8.dp),
+                        modifier = Modifier.padding(horizontal = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
@@ -238,47 +260,79 @@ fun BottomTimelinePanel(
                 }
             }
 
-            // Contextual Selected Keyframe Edit Bar
+            // Contextual Selected Keyframe Edit Bar + Pro Easing Curves
             if (selectedKeyframeId != null || hasCopiedKeyframe) {
                 val selKf = tl.keyframes.firstOrNull { it.id == selectedKeyframeId }
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(SurfaceElevated)
                         .padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = if (selKf != null) "Key F${selKf.frame} (${selKf.property.label})" else "Clipboard ready",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
-                        color = KeyframeAmber,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (selKf != null) {
-                        Surface(
-                            onClick = { onMoveSelectedKeyframe(selKf.frame - 5) },
-                            shape = RoundedCornerShape(6.dp),
-                            color = SurfaceCard
-                        ) { Text("-5F", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) }
-                        Surface(
-                            onClick = { onMoveSelectedKeyframe(selKf.frame + 5) },
-                            shape = RoundedCornerShape(6.dp),
-                            color = SurfaceCard
-                        ) { Text("+5F", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) }
-                        IconButton(onClick = onDuplicateKeyframe, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Rounded.Add, contentDescription = "Duplicate keyframe", tint = StudioCyan, modifier = Modifier.size(15.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (selKf != null) "Key F${selKf.frame} (${selKf.property.label})" else "Clipboard ready",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFontFamily),
+                            color = KeyframeAmber,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (selKf != null) {
+                            Surface(
+                                onClick = { onMoveSelectedKeyframe(selKf.frame - 5) },
+                                shape = RoundedCornerShape(6.dp),
+                                color = SurfaceCard
+                            ) { Text("-5F", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) }
+                            Surface(
+                                onClick = { onMoveSelectedKeyframe(selKf.frame + 5) },
+                                shape = RoundedCornerShape(6.dp),
+                                color = SurfaceCard
+                            ) { Text("+5F", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) }
+                            IconButton(onClick = onDuplicateKeyframe, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Rounded.Add, contentDescription = "Duplicate keyframe", tint = StudioCyan, modifier = Modifier.size(15.dp))
+                            }
+                            IconButton(onClick = onCopyKeyframe, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy keyframe", tint = TextPrimary, modifier = Modifier.size(15.dp))
+                            }
+                            IconButton(onClick = onDeleteKeyframe, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete keyframe", tint = DangerRed, modifier = Modifier.size(15.dp))
+                            }
                         }
-                        IconButton(onClick = onCopyKeyframe, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy keyframe", tint = TextPrimary, modifier = Modifier.size(15.dp))
-                        }
-                        IconButton(onClick = onDeleteKeyframe, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete keyframe", tint = DangerRed, modifier = Modifier.size(15.dp))
+                        if (hasCopiedKeyframe) {
+                            IconButton(onClick = onPasteKeyframe, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste keyframe at playhead", tint = StudioCyan, modifier = Modifier.size(15.dp))
+                            }
                         }
                     }
-                    if (hasCopiedKeyframe) {
-                        IconButton(onClick = onPasteKeyframe, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste keyframe at playhead", tint = StudioCyan, modifier = Modifier.size(15.dp))
+                    if (selKf != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Curve:", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                            InterpolationType.entries.forEach { curve ->
+                                val active = selKf.interpolation == curve
+                                Surface(
+                                    onClick = { onUpdateKeyframeInterpolation(curve) },
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (active) ElectricIndigo else SurfaceCard,
+                                    border = BorderStroke(1.dp, if (active) StudioCyan else HairlineBorder)
+                                ) {
+                                    Text(
+                                        curve.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (active) TextPrimary else TextSecondary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }

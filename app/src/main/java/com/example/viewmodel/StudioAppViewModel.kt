@@ -6,14 +6,19 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.LibraryAssetEntity
 import com.example.data.ProjectEntity
+import com.example.data.SavedPoseEntity
+import com.example.data.SceneSerializer
 import com.example.data.StudioRepository
+import com.example.engine.animation.AnimationEvaluator
 import com.example.engine.animation.AnimationPresetInfo
+import com.example.engine.animation.IkSolver
 import com.example.engine.io.GlbExporter
 import com.example.engine.io.ModelImporter
 import com.example.engine.io.VideoExportRequest
 import com.example.engine.io.VideoExporter
 import com.example.engine.model.AnimationClipTrack
 import com.example.engine.model.AssetCategory
+import com.example.engine.model.BackdropPreset
 import com.example.engine.model.BoneNode
 import com.example.engine.model.CameraData
 import com.example.engine.model.CameraPreset
@@ -22,8 +27,10 @@ import com.example.engine.model.CharacterCategory
 import com.example.engine.model.CharacterMeshBuilder
 import com.example.engine.model.EditSubMode
 import com.example.engine.model.EditorMode
+import com.example.engine.model.Environment3DFactory
 import com.example.engine.model.ExportFormat
 import com.example.engine.model.ExportResolution
+import com.example.engine.model.IkLimb
 import com.example.engine.model.InterpolationType
 import com.example.engine.model.Keyframe
 import com.example.engine.model.KeyframeProperty
@@ -39,6 +46,7 @@ import com.example.engine.model.SceneDocument
 import com.example.engine.model.SceneNode
 import com.example.engine.model.ShadingMode
 import com.example.engine.model.SkeletonData
+import com.example.engine.model.SkinPreset
 import com.example.engine.model.Transform3D
 import com.example.engine.model.TransformAxis
 import com.example.engine.model.TransformTool
@@ -69,12 +77,16 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
     val libraryAssets: StateFlow<List<LibraryAssetEntity>> = repository.libraryAssetsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val savedPoses: StateFlow<List<SavedPoseEntity>> = repository.savedPosesFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _uiState = MutableStateFlow(StudioUiState())
     val uiState: StateFlow<StudioUiState> = _uiState.asStateFlow()
 
     private val undoStack = ArrayDeque<SceneDocument>()
     private val redoStack = ArrayDeque<SceneDocument>()
     private var playbackJob: Job? = null
+    private var turntableJob: Job? = null
     private var autosaveJob: Job? = null
     private var exportJob: Job? = null
 
@@ -95,6 +107,14 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
             val doc = repository.createQuickStartProject()
             openSceneInEditor(doc)
             notify("Quick-Start Rigged Studio Scene created")
+        }
+    }
+
+    fun openTemplateProject(templateId: String) {
+        viewModelScope.launch {
+            val doc = repository.createProjectFromTemplate(templateId)
+            openSceneInEditor(doc)
+            notify("Loaded template \"${doc.projectName}\"")
         }
     }
 
@@ -144,6 +164,7 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun exitEditorToHub() {
         stopPlayback()
+        stopTurntable()
         saveCurrentProject(silent = true)
         _uiState.update { it.copy(destination = AppDestination.HUB, activeModal = EditorModalSheet.NONE) }
     }
@@ -335,12 +356,76 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
     fun setTransformAxis(axis: TransformAxis) = _uiState.update { it.copy(transformAxis = axis) }
     fun toggleGrid() = _uiState.update { it.copy(showGrid = !it.showGrid) }
     fun toggleSkeletonOverlay() = _uiState.update { it.copy(showSkeleton = !it.showSkeleton) }
+    fun toggleOnionSkin() = _uiState.update { it.copy(showOnionSkin = !it.showOnionSkin) }
+    fun toggleSafeFrame() = _uiState.update { it.copy(showSafeFrame = !it.showSafeFrame) }
+    fun updateViewportFps(fps: Int) = _uiState.update { if (it.viewportFps == fps) it else it.copy(viewportFps = fps) }
     fun openInspector(tab: InspectorTab) = _uiState.update { it.copy(inspectorOpen = true, inspectorTab = tab) }
     fun closeInspector() = _uiState.update { it.copy(inspectorOpen = false) }
     fun openModal(modal: EditorModalSheet) = _uiState.update { it.copy(activeModal = modal) }
     fun closeModal() = _uiState.update { it.copy(activeModal = EditorModalSheet.NONE) }
     fun dismissImportReport() = _uiState.update { it.copy(importReport = null) }
     fun clearToast() = _uiState.update { it.copy(toastMessage = null) }
+
+    fun toggleTurntable() {
+        if (_uiState.value.turntableMode) {
+            stopTurntable()
+        } else {
+            _uiState.update { it.copy(turntableMode = true) }
+            turntableJob?.cancel()
+            turntableJob = viewModelScope.launch {
+                while (isActive && _uiState.value.turntableMode) {
+                    orbitCamera(0.85f, 0f)
+                    delay(24L)
+                }
+            }
+            notify("360° Turntable Showcase ON")
+        }
+    }
+
+    private fun stopTurntable() {
+        turntableJob?.cancel()
+        turntableJob = null
+        _uiState.update { it.copy(turntableMode = false) }
+    }
+
+    // --- 3D World Backgrounds & Skin Presets ---
+
+    fun applyBackdropAnd3DSet(preset: BackdropPreset, include3DSetAndLights: Boolean = true) {
+        mutateScene { doc ->
+            var nodes = doc.nodes
+            if (include3DSetAndLights) {
+                nodes = nodes.filterNot { it.categoryTag == Environment3DFactory.ENV_NODE_TAG }
+                val envNode = Environment3DFactory.buildEnvironmentSetNode(preset)
+                if (envNode != null) {
+                    nodes = listOf(envNode) + nodes
+                }
+                val nonLightNodes = nodes.filterNot { it.nodeType == NodeType.LIGHT }
+                nodes = nonLightNodes + Environment3DFactory.buildLightsForBackdrop(preset)
+            }
+            doc.copy(backdropPreset = preset, nodes = nodes)
+        }
+        notify("3D World: ${preset.label}")
+    }
+
+    fun applySkinPresetToSelected(preset: SkinPreset) {
+        val selId = _uiState.value.selectedNodeId ?: return
+        mutateScene { doc ->
+            doc.copy(nodes = doc.nodes.map { n ->
+                if (n.id == selId) {
+                    n.copy(
+                        material = n.material.copy(
+                            skinPreset = if (preset == SkinPreset.NONE) null else preset.name,
+                            texturePath = if (preset == SkinPreset.NONE) n.material.texturePath else null,
+                            roughness = preset.defaultRoughness,
+                            metallic = preset.defaultMetallic,
+                            subsurface = preset.defaultSubsurface
+                        )
+                    )
+                } else n
+            })
+        }
+        notify("Applied ${preset.label} shader")
+    }
 
     fun selectNode(nodeId: String?, boneId: String? = null) {
         _uiState.update { state ->
@@ -721,6 +806,220 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
         notify("Recomputed smooth proximity bone weights")
     }
 
+    // --- Pro Inverse Kinematics (IK) Handles ---
+
+    fun toggleIkMode() = _uiState.update { it.copy(ikEnabled = !it.ikEnabled) }
+
+    fun selectIkLimb(nodeId: String?, limb: IkLimb) {
+        _uiState.update { state ->
+            val targetNodeId = nodeId ?: state.selectedNodeId
+            state.copy(
+                selectedNodeId = targetNodeId,
+                selectedIkLimb = limb,
+                selectedBoneId = limb.lowerBoneId,
+                editorMode = EditorMode.POSE
+            )
+        }
+    }
+
+    fun setIkPoleAngle(deg: Float) = _uiState.update { it.copy(ikPoleAngle = deg.coerceIn(-90f, 90f)) }
+
+    fun toggleFootPin() {
+        _uiState.update { it.copy(footPinEnabled = !it.footPinEnabled) }
+        notify(if (_uiState.value.footPinEnabled) "Foot IK Ground Pin ON" else "Foot IK Ground Pin OFF")
+    }
+
+    fun solveIkHandleTarget(nodeId: String, limb: IkLimb, targetWorldPos: Vec3) {
+        if (isNodeLocked(nodeId)) return
+        val state = _uiState.value
+        val node = state.scene.nodes.firstOrNull { it.id == nodeId } ?: return
+        val skel = node.skeleton ?: return
+        val evaluated = AnimationEvaluator.evaluate(state.scene, state.scene.timeline.currentFrame)
+        val nodeState = evaluated.nodeStates[nodeId] ?: return
+
+        val clampedTarget = if (state.footPinEnabled && (limb == IkLimb.LEFT_FOOT || limb == IkLimb.RIGHT_FOOT)) {
+            targetWorldPos.copy(y = targetWorldPos.y.coerceAtLeast(0.02f))
+        } else {
+            targetWorldPos
+        }
+
+        val currentPose = skel.bones.associate { b ->
+            b.id to (nodeState.boneRotations[b.id] ?: b.poseRotation)
+        }
+        val solved = IkSolver.solveLimbIk(
+            skeleton = skel,
+            nodeWorldMatrix = nodeState.worldMatrix,
+            currentPose = currentPose,
+            limb = limb,
+            targetWorldPos = clampedTarget,
+            poleAngleDeg = state.ikPoleAngle
+        ) ?: return
+
+        mutateScene(recordUndo = false) { doc ->
+            val updatedNodes = doc.nodes.map { n ->
+                if (n.id == nodeId && n.skeleton != null) {
+                    val updatedBones = n.skeleton.bones.map { b ->
+                        when (b.id) {
+                            solved.upperBoneId -> b.copy(poseRotation = solved.upperRotation)
+                            solved.lowerBoneId -> b.copy(poseRotation = solved.lowerRotation)
+                            else -> b
+                        }
+                    }
+                    n.copy(skeleton = SkeletonData(updatedBones))
+                } else n
+            }
+            var tl = doc.timeline
+            if (tl.autoKey) {
+                val frame = tl.currentFrame.toInt()
+                tl = upsertKeyframeInTimeline(tl, nodeId, solved.upperBoneId, frame, KeyframeProperty.BONE_ROTATION, solved.upperRotation)
+                tl = upsertKeyframeInTimeline(tl, nodeId, solved.lowerBoneId, frame, KeyframeProperty.BONE_ROTATION, solved.lowerRotation)
+            }
+            doc.copy(nodes = updatedNodes, timeline = tl)
+        }
+    }
+
+    fun nudgeSelectedIkTarget(delta: Vec3) {
+        val state = _uiState.value
+        val node = selectedRiggedNode() ?: run {
+            notify("Select a rigged character first")
+            return
+        }
+        val limb = state.selectedIkLimb ?: IkLimb.RIGHT_HAND
+        val skel = node.skeleton ?: return
+        val evaluated = AnimationEvaluator.evaluate(state.scene, state.scene.timeline.currentFrame)
+        val nodeState = evaluated.nodeStates[node.id] ?: return
+        val handles = IkSolver.computeIkHandleWorldPositions(skel, nodeState.worldMatrix, nodeState.boneRotations)
+        val cur = handles[limb] ?: return
+        solveIkHandleTarget(node.id, limb, cur + delta)
+    }
+
+    fun keyframeSelectedIkLimb() {
+        val node = selectedRiggedNode() ?: run {
+            notify("Select a rigged character first")
+            return
+        }
+        if (isNodeLocked(node.id)) {
+            notify("Layer is locked on timeline")
+            return
+        }
+        val limb = _uiState.value.selectedIkLimb ?: IkLimb.RIGHT_HAND
+        val skel = node.skeleton ?: return
+        val frame = _uiState.value.scene.timeline.currentFrame.toInt()
+        val upper = skel.bones.firstOrNull { it.id == limb.upperBoneId } ?: return
+        val lower = skel.bones.firstOrNull { it.id == limb.lowerBoneId } ?: return
+        mutateScene { doc ->
+            var tl = doc.timeline
+            tl = upsertKeyframeInTimeline(tl, node.id, upper.id, frame, KeyframeProperty.BONE_ROTATION, upper.poseRotation)
+            tl = upsertKeyframeInTimeline(tl, node.id, lower.id, frame, KeyframeProperty.BONE_ROTATION, lower.poseRotation)
+            doc.copy(timeline = tl)
+        }
+        notify("Keyed ${limb.label} at F$frame")
+    }
+
+    // --- Pro Pose Library (Save, Reuse, Blend, Mirror, Keyframe on Timeline) ---
+
+    fun setPoseBlendWeight(weight: Float) =
+        _uiState.update { it.copy(poseBlendWeight = weight.coerceIn(0.05f, 1.0f)) }
+
+    fun saveCurrentPoseToLibrary(name: String, category: String = "Custom") {
+        val node = selectedRiggedNode() ?: run {
+            notify("Select a rigged character to save its pose")
+            return
+        }
+        val skel = node.skeleton ?: return
+        val evaluated = AnimationEvaluator.evaluate(_uiState.value.scene, _uiState.value.scene.timeline.currentFrame)
+        val evalPose = evaluated.nodeStates[node.id]?.boneRotations ?: emptyMap()
+        val poseMap = skel.bones.associate { b -> b.id to (evalPose[b.id] ?: b.poseRotation) }
+        val cleanName = name.trim().ifBlank { "Pose ${savedPoses.value.size + 1}" }
+        viewModelScope.launch {
+            repository.saveCustomPose(cleanName, category, poseMap)
+            notify("Saved pose \"$cleanName\" to Pose Library")
+        }
+    }
+
+    fun applySavedPose(pose: SavedPoseEntity, blendWeight: Float = _uiState.value.poseBlendWeight, insertKeyframes: Boolean = false) {
+        val node = selectedRiggedNode() ?: run {
+            notify("Select a rigged character to apply pose")
+            return
+        }
+        if (isNodeLocked(node.id)) {
+            notify("Layer is locked on timeline")
+            return
+        }
+        val skel = node.skeleton ?: return
+        val targetMap = SceneSerializer.deserializePoseMap(pose.poseJson)
+        val currentMap = skel.bones.associate { it.id to it.poseRotation }
+        val blended = IkSolver.blendPoses(currentMap, targetMap, blendWeight)
+        val frame = _uiState.value.scene.timeline.currentFrame.toInt()
+
+        mutateScene { doc ->
+            val updatedNodes = doc.nodes.map { n ->
+                if (n.id == node.id && n.skeleton != null) {
+                    n.copy(skeleton = SkeletonData(n.skeleton.bones.map { b ->
+                        b.copy(poseRotation = blended[b.id] ?: b.poseRotation)
+                    }))
+                } else n
+            }
+            var tl = doc.timeline
+            if (insertKeyframes || tl.autoKey) {
+                for (b in skel.bones) {
+                    val rot = blended[b.id] ?: b.poseRotation
+                    tl = upsertKeyframeInTimeline(tl, node.id, b.id, frame, KeyframeProperty.BONE_ROTATION, rot)
+                }
+            }
+            doc.copy(nodes = updatedNodes, timeline = tl)
+        }
+        selectNode(node.id)
+        notify(if (insertKeyframes) "Applied & Keyed \"${pose.name}\" at F$frame" else "Applied pose \"${pose.name}\"")
+    }
+
+    fun mirrorSelectedPose(insertKeyframes: Boolean = false) {
+        val node = selectedRiggedNode() ?: run {
+            notify("Select a rigged character to mirror pose")
+            return
+        }
+        if (isNodeLocked(node.id)) {
+            notify("Layer is locked on timeline")
+            return
+        }
+        val skel = node.skeleton ?: return
+        val curMap = skel.bones.associate { it.id to it.poseRotation }
+        val mirrored = IkSolver.mirrorPose(curMap)
+        val frame = _uiState.value.scene.timeline.currentFrame.toInt()
+
+        mutateScene { doc ->
+            val updatedNodes = doc.nodes.map { n ->
+                if (n.id == node.id && n.skeleton != null) {
+                    n.copy(skeleton = SkeletonData(n.skeleton.bones.map { b ->
+                        b.copy(poseRotation = mirrored[b.id] ?: b.poseRotation)
+                    }))
+                } else n
+            }
+            var tl = doc.timeline
+            if (insertKeyframes || tl.autoKey) {
+                for (b in skel.bones) {
+                    val rot = mirrored[b.id] ?: b.poseRotation
+                    tl = upsertKeyframeInTimeline(tl, node.id, b.id, frame, KeyframeProperty.BONE_ROTATION, rot)
+                }
+            }
+            doc.copy(nodes = updatedNodes, timeline = tl)
+        }
+        notify("Mirrored pose Left ↔ Right")
+    }
+
+    fun deleteSavedPose(poseId: String) {
+        viewModelScope.launch {
+            repository.deleteSavedPose(poseId)
+            notify("Deleted saved pose")
+        }
+    }
+
+    private fun selectedRiggedNode(): SceneNode? {
+        val sel = selectedNode()
+        if (sel?.skeleton != null) return sel
+        return _uiState.value.scene.nodes.firstOrNull { it.skeleton != null }
+    }
+
     // --- Timeline, Keyframes & Animation Clips ---
 
     fun togglePlayback() {
@@ -882,6 +1181,16 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
                 if (it.id == kfId) it.copy(frame = clamped) else it
             }))
         }
+    }
+
+    fun updateSelectedKeyframeInterpolation(type: InterpolationType) {
+        val kfId = _uiState.value.selectedKeyframeId ?: return
+        mutateScene { doc ->
+            doc.copy(timeline = doc.timeline.copy(keyframes = doc.timeline.keyframes.map {
+                if (it.id == kfId) it.copy(interpolation = type) else it
+            }))
+        }
+        notify("Easing curve: ${type.label}")
     }
 
     fun applyAnimationPresetToSelected(preset: AnimationPresetInfo) {
@@ -1059,9 +1368,14 @@ class StudioAppViewModel(application: Application) : AndroidViewModel(applicatio
                         _uiState.update { s -> s.copy(exportState = s.exportState.copy(progress = pct)) }
                     }
                 )
-                ExportFormat.GLB -> withContext(Dispatchers.IO) {
+                ExportFormat.GLB,
+                ExportFormat.OBJ,
+                ExportFormat.FBX,
+                ExportFormat.STL,
+                ExportFormat.PLY,
+                ExportFormat.DAE -> withContext(Dispatchers.IO) {
                     _uiState.update { s -> s.copy(exportState = s.exportState.copy(progress = 0.5f)) }
-                    GlbExporter.exportSceneToGlb(getApplication(), doc)
+                    GlbExporter.exportScene(getApplication(), doc, cfg.format)
                 }
             }
             result.fold(

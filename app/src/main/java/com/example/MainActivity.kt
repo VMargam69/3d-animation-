@@ -101,6 +101,7 @@ private fun DraftRigStudioRoot(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val assets by viewModel.libraryAssets.collectAsStateWithLifecycle()
+    val savedPoses by viewModel.savedPoses.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showBlenderGuide by remember { mutableStateOf(false) }
 
@@ -147,6 +148,7 @@ private fun DraftRigStudioRoot(
                         HubTab.PROJECTS -> ProjectsHubScreen(
                             projects = projects,
                             onQuickStart = viewModel::openQuickStartScene,
+                            onOpenTemplate = viewModel::openTemplateProject,
                             onCreateBlank = viewModel::createNewBlankProject,
                             onOpenProject = viewModel::openProject,
                             onRenameProject = viewModel::renameProject,
@@ -186,6 +188,7 @@ private fun DraftRigStudioRoot(
                     EditorScreen(
                         state = state,
                         libraryAssets = assets,
+                        savedPoses = savedPoses,
                         viewModel = viewModel,
                         onImportBlenderModel = launchModelImport,
                         onPickTextureImage = launchTexturePicker

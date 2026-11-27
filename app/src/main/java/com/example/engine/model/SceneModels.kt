@@ -5,12 +5,13 @@ import java.util.UUID
 enum class EditorMode(val label: String) {
     OBJECT("Object"),
     EDIT("Edit"),
-    POSE("Rig / Pose")
+    POSE("Rig / IK")
 }
 
 enum class ShadingMode(val label: String) {
     SOLID("Solid"),
     MATERIAL("Material"),
+    TOON("Toon"),
     WIREFRAME("Wire")
 }
 
@@ -73,7 +74,11 @@ enum class LightType(val label: String) {
 
 enum class InterpolationType(val label: String) {
     LINEAR("Linear"),
-    EASE_IN_OUT("Ease"),
+    EASE_IN_OUT("Smooth"),
+    EASE_IN("Ease In"),
+    EASE_OUT("Ease Out"),
+    BOUNCE("Bounce"),
+    ELASTIC("Spring"),
     STEP("Step")
 }
 
@@ -156,9 +161,63 @@ enum class AccessoryKind(val label: String) {
     GLASSES("Visor / Glasses")
 }
 
-enum class ExportFormat(val label: String, val extension: String) {
-    MP4("MP4 Video (H.264)", "mp4"),
-    GLB("GLB 3D Scene (glTF 2.0)", "glb")
+enum class ExportFormat(val label: String, val extension: String, val mimeType: String) {
+    MP4("MP4 Video", "mp4", "video/mp4"),
+    GLB("GLB (glTF 2.0)", "glb", "model/gltf-binary"),
+    OBJ("OBJ + MTL", "obj", "text/plain"),
+    FBX("FBX (Blender)", "fbx", "application/octet-stream"),
+    STL("STL (3D Print)", "stl", "model/stl"),
+    PLY("PLY Mesh", "ply", "application/octet-stream"),
+    DAE("DAE (Collada)", "dae", "model/vnd.collada+xml")
+}
+
+enum class BackdropPreset(
+    val label: String,
+    val zenithHex: Long,
+    val horizonHex: Long,
+    val groundHex: Long,
+    val sunColorHex: Long
+) {
+    STUDIO_DARK("Studio Dark", 0xFF0B0E17, 0xFF171E30, 0xFF0A0C12, 0xFF6366F1),
+    VILLAGE_SUNSET("Village Sunset", 0xFF432357, 0xFFF59E0B, 0xFF5C3A21, 0xFFFDE68A),
+    TWILIGHT_CITY("Twilight City", 0xFF0D1433, 0xFF312E81, 0xFF0F172A, 0xFF22D3EE),
+    FOREST_MEADOW("Forest Meadow", 0xFF2563EB, 0xFF93C5FD, 0xFF1E3A24, 0xFFFEF08A),
+    CYBER_NEON("Cyber Runway", 0xFF09051A, 0xFF3B0764, 0xFF070A14, 0xFF22D3EE),
+    ROYAL_COURTYARD("Royal Castle", 0xFF1E1B4B, 0xFF7C2D12, 0xFF27272A, 0xFFFB923C),
+    DESERT_DUNES("Desert Dunes", 0xFF1D4ED8, 0xFFFDBA74, 0xFFB45309, 0xFFFEF3C7),
+    SPACE_ARENA("Starlight Space", 0xFF02040A, 0xFF1E1B4B, 0xFF050816, 0xFF38BDF8)
+}
+
+enum class SkinPreset(
+    val label: String,
+    val defaultRoughness: Float,
+    val defaultMetallic: Float,
+    val defaultSubsurface: Float
+) {
+    NONE("None (Solid)", 0.45f, 0.12f, 0.0f),
+    NATURAL_SKIN("Warm Skin", 0.52f, 0.02f, 0.55f),
+    STYLIZED_PORCELAIN("Stylized Skin", 0.40f, 0.04f, 0.48f),
+    DENIM_STREETWEAR("Street Denim", 0.78f, 0.02f, 0.05f),
+    TITANIUM_ARMOR("Brushed Armor", 0.24f, 0.85f, 0.0f),
+    CARBON_FIBER("Carbon Fiber", 0.34f, 0.45f, 0.0f),
+    CYBER_CIRCUIT("Cyber Grid", 0.28f, 0.60f, 0.0f),
+    ROYAL_BROCADE("Gold Brocade", 0.42f, 0.38f, 0.08f),
+    WARM_WOOD("Carved Wood", 0.70f, 0.02f, 0.05f),
+    UV_CHECKER("UV Checker", 0.50f, 0.05f, 0.0f)
+}
+
+enum class IkLimb(
+    val label: String,
+    val shortLabel: String,
+    val upperBoneId: String,
+    val lowerBoneId: String,
+    val poleHint: Vec3,
+    val handleColorHex: Long
+) {
+    LEFT_HAND("Left Hand IK", "L Hand", "l_upper_arm", "l_forearm", Vec3(-0.35f, 0f, -1f), 0xFF22D3EE),
+    RIGHT_HAND("Right Hand IK", "R Hand", "r_upper_arm", "r_forearm", Vec3(0.35f, 0f, -1f), 0xFF22D3EE),
+    LEFT_FOOT("Left Foot IK", "L Foot", "l_thigh", "l_shin", Vec3(-0.15f, 0f, 1f), 0xFFF59E0B),
+    RIGHT_FOOT("Right Foot IK", "R Foot", "r_thigh", "r_shin", Vec3(0.15f, 0f, 1f), 0xFFF59E0B)
 }
 
 enum class RenderQuality(val label: String, val bitrateMbps: Int) {
@@ -190,7 +249,9 @@ data class MaterialData(
     val emissionColor: Long = 0xFF000000,
     val emissionStrength: Float = 0.0f,
     val texturePath: String? = null,
-    val uvScale: Float = 1.0f
+    val uvScale: Float = 1.0f,
+    val subsurface: Float = 0.0f,
+    val skinPreset: String? = null
 )
 
 data class MeshData(
@@ -251,7 +312,14 @@ data class SkeletonData(
 ) {
     companion object {
         const val MAX_BONES = 32
+        private val DOWNWARD_BONES = setOf(
+            "l_upper_arm", "l_forearm", "r_upper_arm", "r_forearm",
+            "l_thigh", "l_shin", "r_thigh", "r_shin"
+        )
     }
+
+    fun boneTailLocalOffset(bone: BoneNode): Vec3 =
+        if (bone.id in DOWNWARD_BONES) Vec3(0f, -bone.length, 0f) else Vec3(0f, bone.length, 0f)
 
     fun computeWorldJointPositions(poseOverrides: Map<String, Vec3> = emptyMap()): Map<String, Pair<Vec3, Vec3>> {
         val worldMatrices = computeBoneWorldMatrices(poseOverrides)
@@ -259,7 +327,7 @@ data class SkeletonData(
         for (bone in bones) {
             val mat = worldMatrices[bone.id] ?: Math3D.identity()
             val head = Math3D.transformPoint(mat, Vec3.ZERO)
-            val tail = Math3D.transformPoint(mat, Vec3(0f, bone.length, 0f))
+            val tail = Math3D.transformPoint(mat, boneTailLocalOffset(bone))
             result[bone.id] = head to tail
         }
         return result
@@ -285,7 +353,11 @@ data class SkeletonData(
     fun computeSkinningPalette(poseOverrides: Map<String, Vec3> = emptyMap()): FloatArray {
         val palette = FloatArray(MAX_BONES * 16)
         for (i in 0 until MAX_BONES) {
-            android.opengl.Matrix.setIdentityM(palette, i * 16)
+            val base = i * 16
+            palette[base] = 1f
+            palette[base + 5] = 1f
+            palette[base + 10] = 1f
+            palette[base + 15] = 1f
         }
         if (bones.isEmpty()) return palette
 
@@ -389,6 +461,7 @@ data class SceneDocument(
     val nodes: List<SceneNode> = emptyList(),
     val timeline: TimelineState = TimelineState(),
     val viewportCamera: ViewportCameraState = ViewportCameraState(),
+    val backdropPreset: BackdropPreset = BackdropPreset.STUDIO_DARK,
     val ambientColor: Long = 0xFF1A2035,
     val ambientIntensity: Float = 0.35f,
     val updatedAt: Long = System.currentTimeMillis()

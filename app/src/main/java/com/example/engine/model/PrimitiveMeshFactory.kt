@@ -88,6 +88,12 @@ object PrimitiveMeshFactory {
         return MeshData(verts, norms, uvs, idx)
     }
 
+    fun createSphere(radius: Float, slices: Int = 14, stacks: Int = 10): MeshData =
+        createUvSphere(radius, slices, stacks)
+
+    fun createCone(radius: Float, height: Float, segments: Int = 16): MeshData =
+        createCylinder(0f, radius, height, segments)
+
     fun createUvSphere(radius: Float, slices: Int, stacks: Int): MeshData {
         val vList = ArrayList<Float>()
         val nList = ArrayList<Float>()
@@ -538,6 +544,11 @@ object CharacterMeshBuilder {
                 skin = 0xFFF2C8AF, hair = 0xFF5C2D1B, shirt = 0xFFF1F5F9, accent = spec.secondaryColor,
                 pants = 0xFF0284C7, shoes = 0xFFE2E8F0, belt = 0xFF0EA5E9,
                 isFemale = true, hasLabCoat = true, hasStethoscope = true
+            )
+            "char_streetwear_maya" -> HumanoidStyleProfile(
+                skin = 0xFFF3C9B2, hair = 0xFF6B4C38, shirt = 0xFF1E222A, accent = 0xFFE2E8F0,
+                pants = 0xFF232730, shoes = 0xFFF8FAFC, belt = 0xFF11141A,
+                eyeColor = 0xFF2C3E50, isFemale = true, hasJacketOpen = true
             )
             "char_blender_mannequin" -> HumanoidStyleProfile(
                 skin = 0xFF283044, hair = 0xFF22D3EE, shirt = spec.primaryColor, accent = spec.secondaryColor,

@@ -178,6 +178,39 @@ object AnimationEvaluator {
     private fun ease(t: Float, type: InterpolationType): Float = when (type) {
         InterpolationType.LINEAR -> t
         InterpolationType.EASE_IN_OUT -> t * t * (3f - 2f * t)
+        InterpolationType.EASE_IN -> t * t * t
+        InterpolationType.EASE_OUT -> {
+            val inv = 1f - t
+            1f - inv * inv * inv
+        }
+        InterpolationType.BOUNCE -> {
+            val n1 = 7.5625f
+            val d1 = 2.75f
+            when {
+                t < 1f / d1 -> n1 * t * t
+                t < 2f / d1 -> {
+                    val u = t - 1.5f / d1
+                    n1 * u * u + 0.75f
+                }
+                t < 2.5f / d1 -> {
+                    val u = t - 2.25f / d1
+                    n1 * u * u + 0.9375f
+                }
+                else -> {
+                    val u = t - 2.625f / d1
+                    n1 * u * u + 0.984375f
+                }
+            }
+        }
+        InterpolationType.ELASTIC -> {
+            if (t <= 0f) 0f
+            else if (t >= 1f) 1f
+            else {
+                val p = 0.35f
+                (Math.pow(2.0, (-10.0 * t)).toFloat() *
+                    kotlin.math.sin(((t - p / 4f) * (2.0 * Math.PI) / p)).toFloat() + 1f)
+            }
+        }
         InterpolationType.STEP -> if (t < 1f) 0f else 1f
     }
 }

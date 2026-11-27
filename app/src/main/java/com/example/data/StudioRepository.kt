@@ -1,15 +1,18 @@
 package com.example.data
 
 import android.content.Context
+import com.example.R
 import com.example.engine.model.AccessoryKind
 import com.example.engine.model.AnimationClipTrack
 import com.example.engine.model.AssetCategory
+import com.example.engine.model.BackdropPreset
 import com.example.engine.model.CameraData
 import com.example.engine.model.CharacterArchetype
 import com.example.engine.model.CharacterBuildSpec
 import com.example.engine.model.CharacterCategory
 import com.example.engine.model.CharacterMeshBuilder
 import com.example.engine.model.CostumePreset
+import com.example.engine.model.Environment3DFactory
 import com.example.engine.model.InterpolationType
 import com.example.engine.model.Keyframe
 import com.example.engine.model.KeyframeProperty
@@ -22,6 +25,7 @@ import com.example.engine.model.PrimitiveKind
 import com.example.engine.model.PrimitiveMeshFactory
 import com.example.engine.model.SceneDocument
 import com.example.engine.model.SceneNode
+import com.example.engine.model.SkinPreset
 import com.example.engine.model.TimelineState
 import com.example.engine.model.Transform3D
 import com.example.engine.model.Vec3
@@ -32,6 +36,16 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
+data class StarterTemplateInfo(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val aspectLabel: String,
+    val backdrop: BackdropPreset,
+    val drawableResId: Int,
+    val accentHex: Long
+)
+
 class StudioRepository(private val context: Context) {
     private val dao = StudioDatabase.getInstance(context).studioDao()
     private val projectsDir = File(context.filesDir, "projects").apply { mkdirs() }
@@ -39,13 +53,204 @@ class StudioRepository(private val context: Context) {
 
     val projectsFlow: Flow<List<ProjectEntity>> = dao.observeProjects()
     val libraryAssetsFlow: Flow<List<LibraryAssetEntity>> = dao.observeLibraryAssets()
+    val savedPosesFlow: Flow<List<SavedPoseEntity>> = dao.observeSavedPoses()
 
     suspend fun ensureSeeded() = withContext(Dispatchers.IO) {
-        val existingIds = dao.getAllLibraryAssetIds().toHashSet()
-        val missing = buildBuiltInLibraryCatalog().filter { it.id !in existingIds }
-        if (missing.isNotEmpty()) {
-            dao.upsertLibraryAssets(missing)
+        val existingAssetIds = dao.getAllLibraryAssetIds().toHashSet()
+        val missingAssets = buildBuiltInLibraryCatalog().filter { it.id !in existingAssetIds }
+        if (missingAssets.isNotEmpty()) {
+            dao.upsertLibraryAssets(missingAssets)
         }
+        val existingPoseIds = dao.getAllSavedPoseIds().toHashSet()
+        val missingPoses = buildBuiltInPoseCatalog().filter { it.id !in existingPoseIds }
+        if (missingPoses.isNotEmpty()) {
+            dao.upsertSavedPoses(missingPoses)
+        }
+    }
+
+    suspend fun saveCustomPose(name: String, category: String, pose: Map<String, Vec3>): SavedPoseEntity =
+        withContext(Dispatchers.IO) {
+            val entity = SavedPoseEntity(
+                id = UUID.randomUUID().toString(),
+                name = name.trim().ifBlank { "Custom Pose" },
+                category = category.ifBlank { "Custom" },
+                poseJson = SceneSerializer.serializePoseMap(pose),
+                boneCount = pose.size,
+                isBuiltIn = false,
+                accentHex = 0xFF6366F1,
+                createdAt = System.currentTimeMillis()
+            )
+            dao.upsertSavedPose(entity)
+            entity
+        }
+
+    suspend fun deleteSavedPose(poseId: String) = withContext(Dispatchers.IO) {
+        dao.deleteSavedPoseById(poseId)
+    }
+
+    suspend fun createProjectFromTemplate(templateId: String): SceneDocument = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        val doc = when (templateId) {
+            "tpl_village_sunset" -> {
+                val aarav = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Aarav Festive",
+                        category = CharacterCategory.DESI,
+                        costume = CostumePreset.INDIAN_TRADITIONAL,
+                        primaryColor = 0xFFDC2626,
+                        secondaryColor = 0xFFF59E0B,
+                        accessory = AccessoryKind.TURBAN,
+                        styleId = "char_desi_hero"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(0f, 0f, -1.8f)))
+                val envSet = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.VILLAGE_SUNSET)!!
+                val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.VILLAGE_SUNSET)
+                val cam = SceneNode(name = "Village Cam", nodeType = NodeType.CAMERA, transform = Transform3D(Vec3(0.4f, 1.85f, 5.2f)), camera = CameraData(45f, isActive = true))
+                val walkClip = AnimationClipTrack(targetNodeId = aarav.id, clipName = "Walk Cycle", presetId = "walk", startFrame = 0, durationFrames = 45, loop = true, colorHex = 0xFFF59E0B)
+                val kfs = listOf(
+                    Keyframe(targetNodeId = aarav.id, frame = 0, property = KeyframeProperty.POSITION, vec3Value = Vec3(0f, 0f, -2.2f), interpolation = InterpolationType.LINEAR),
+                    Keyframe(targetNodeId = aarav.id, frame = 150, property = KeyframeProperty.POSITION, vec3Value = Vec3(0f, 0f, 1.4f), interpolation = InterpolationType.LINEAR)
+                )
+                SceneDocument(
+                    projectId = id,
+                    projectName = "Village Sunset Walk",
+                    nodes = listOf(aarav, envSet) + lights + cam,
+                    timeline = TimelineState(fps = 30, totalFrames = 150, keyframes = kfs, clips = listOf(walkClip)),
+                    backdropPreset = BackdropPreset.VILLAGE_SUNSET
+                )
+            }
+            "tpl_twilight_cafe" -> {
+                val maya = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Maya Streetwear",
+                        category = CharacterCategory.WESTERN,
+                        costume = CostumePreset.FORMAL,
+                        primaryColor = 0xFF1E222A,
+                        secondaryColor = 0xFFE2E8F0,
+                        styleId = "char_streetwear_maya"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(-0.75f, 0f, 0.2f), rotation = Vec3(0f, 28f, 0f)))
+                val alex = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Alex Explorer",
+                        category = CharacterCategory.WESTERN,
+                        costume = CostumePreset.FORMAL,
+                        primaryColor = 0xFF334155,
+                        secondaryColor = 0xFF6366F1,
+                        styleId = "char_western_ranger"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(0.80f, 0f, 0.1f), rotation = Vec3(0f, -32f, 0f)))
+                val envSet = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.TWILIGHT_CITY)!!
+                val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.TWILIGHT_CITY)
+                val cam = SceneNode(name = "Café Cam", nodeType = NodeType.CAMERA, transform = Transform3D(Vec3(0f, 1.75f, 5.4f)), camera = CameraData(45f, isActive = true))
+                val talkClip = AnimationClipTrack(targetNodeId = maya.id, clipName = "Talk Gesture", presetId = "talking", startFrame = 0, durationFrames = 50, loop = true, colorHex = 0xFF6366F1)
+                val waveClip = AnimationClipTrack(targetNodeId = alex.id, clipName = "Friendly Wave", presetId = "waving", startFrame = 15, durationFrames = 55, loop = true, colorHex = 0xFF22D3EE)
+                SceneDocument(
+                    projectId = id,
+                    projectName = "Twilight Café Dialogue",
+                    nodes = listOf(maya, alex, envSet) + lights + cam,
+                    timeline = TimelineState(fps = 30, totalFrames = 150, clips = listOf(talkClip, waveClip)),
+                    backdropPreset = BackdropPreset.TWILIGHT_CITY
+                )
+            }
+            "tpl_forest_meadow" -> {
+                val panda = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Momo Red Panda",
+                        category = CharacterCategory.ANIMALS,
+                        bodyType = CharacterArchetype.QUADRUPED,
+                        primaryColor = 0xFFC2410C,
+                        secondaryColor = 0xFFFFF7ED,
+                        styleId = "char_red_panda"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(-0.65f, 0f, 0.25f), rotation = Vec3(0f, 22f, 0f)))
+                val dancer = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Bima Meadow",
+                        category = CharacterCategory.INDONESIAN,
+                        costume = CostumePreset.MYTHOLOGICAL,
+                        primaryColor = 0xFFD97706,
+                        secondaryColor = 0xFF22D3EE,
+                        styleId = "char_indo_dancer"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(0.75f, 0f, -0.25f), rotation = Vec3(0f, -15f, 0f)))
+                val envSet = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.FOREST_MEADOW)!!
+                val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.FOREST_MEADOW)
+                val cam = SceneNode(name = "Meadow Cam", nodeType = NodeType.CAMERA, transform = Transform3D(Vec3(0f, 1.8f, 5.5f)), camera = CameraData(45f, isActive = true))
+                val danceClip = AnimationClipTrack(targetNodeId = dancer.id, clipName = "Groove Dance", presetId = "dance", startFrame = 0, durationFrames = 48, loop = true, colorHex = 0xFF10B981)
+                val jumpClip = AnimationClipTrack(targetNodeId = panda.id, clipName = "Happy Hop", presetId = "jump", startFrame = 0, durationFrames = 40, loop = true, colorHex = 0xFFF59E0B)
+                SceneDocument(
+                    projectId = id,
+                    projectName = "Forest Dance Reel",
+                    nodes = listOf(dancer, panda, envSet) + lights + cam,
+                    timeline = TimelineState(fps = 30, totalFrames = 150, clips = listOf(danceClip, jumpClip)),
+                    backdropPreset = BackdropPreset.FOREST_MEADOW
+                )
+            }
+            "tpl_cyber_runway" -> {
+                val maya = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Maya Streetwear",
+                        category = CharacterCategory.WESTERN,
+                        costume = CostumePreset.FORMAL,
+                        primaryColor = 0xFF1E222A,
+                        secondaryColor = 0xFFE2E8F0,
+                        styleId = "char_streetwear_maya"
+                    )
+                ).copy(
+                    transform = Transform3D(position = Vec3(-0.6f, 0f, -0.5f)),
+                    material = MaterialData(name = "Street Denim Skin", baseColor = 0xFFFFFFFF, roughness = 0.55f, metallic = 0.08f, skinPreset = SkinPreset.DENIM_STREETWEAR.name)
+                )
+                val bot = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Nova Cyber Bot",
+                        category = CharacterCategory.LATEST,
+                        costume = CostumePreset.ORIGINAL_HERO,
+                        primaryColor = 0xFFF1F5F9,
+                        secondaryColor = 0xFF22D3EE,
+                        styleId = "char_cyber_bot"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(0.95f, 0f, -1.1f), rotation = Vec3(0f, -20f, 0f)))
+                val envSet = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.CYBER_NEON)!!
+                val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.CYBER_NEON)
+                val cam = SceneNode(name = "Runway Cam", nodeType = NodeType.CAMERA, transform = Transform3D(Vec3(0f, 1.75f, 5.2f)), camera = CameraData(44f, isActive = true))
+                val walkClip = AnimationClipTrack(targetNodeId = maya.id, clipName = "Runway Walk", presetId = "walk", startFrame = 0, durationFrames = 44, loop = true, colorHex = 0xFF22D3EE)
+                val hoverClip = AnimationClipTrack(targetNodeId = bot.id, clipName = "Cyber Spin", presetId = "spin", startFrame = 0, durationFrames = 50, loop = true, colorHex = 0xFF6366F1)
+                SceneDocument(
+                    projectId = id,
+                    projectName = "Cyber Runway Showcase",
+                    nodes = listOf(maya, bot, envSet) + lights + cam,
+                    timeline = TimelineState(fps = 30, totalFrames = 150, clips = listOf(walkClip, hoverClip)),
+                    backdropPreset = BackdropPreset.CYBER_NEON
+                )
+            }
+            else -> { // tpl_royal_castle
+                val knight = CharacterMeshBuilder.buildRiggedCharacterNode(
+                    CharacterBuildSpec(
+                        name = "Kavi Royal Knight",
+                        category = CharacterCategory.LATEST,
+                        costume = CostumePreset.FANTASY,
+                        primaryColor = 0xFF94A3B8,
+                        secondaryColor = 0xFF6366F1,
+                        styleId = "char_royal_knight"
+                    )
+                ).copy(transform = Transform3D(position = Vec3(0f, 0f, 0f)))
+                val envSet = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.ROYAL_COURTYARD)!!
+                val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.ROYAL_COURTYARD)
+                val cam = SceneNode(name = "Castle Cam", nodeType = NodeType.CAMERA, transform = Transform3D(Vec3(0.6f, 1.85f, 5.0f)), camera = CameraData(45f, isActive = true))
+                val combatClip = AnimationClipTrack(targetNodeId = knight.id, clipName = "Combat Guard", presetId = "combat", startFrame = 0, durationFrames = 46, loop = true, colorHex = 0xFFEF4444)
+                val victoryClip = AnimationClipTrack(targetNodeId = knight.id, clipName = "Victory Cheer", presetId = "victory", startFrame = 60, durationFrames = 55, loop = false, colorHex = 0xFFF59E0B)
+                SceneDocument(
+                    projectId = id,
+                    projectName = "Royal Castle Duel",
+                    nodes = listOf(knight, envSet) + lights + cam,
+                    timeline = TimelineState(fps = 30, totalFrames = 140, clips = listOf(combatClip, victoryClip)),
+                    backdropPreset = BackdropPreset.ROYAL_COURTYARD
+                )
+            }
+        }
+        saveProject(doc, isRecovery = false)
+        doc
     }
 
     suspend fun createQuickStartProject(): SceneDocument = withContext(Dispatchers.IO) {
@@ -60,14 +265,7 @@ class StudioRepository(private val context: Context) {
                 accessory = AccessoryKind.CAPE
             )
         )
-        val floor = SceneNode(
-            name = "Stage Floor",
-            nodeType = NodeType.MESH,
-            primitiveKind = PrimitiveKind.PLANE,
-            transform = Transform3D(position = Vec3(0f, 0f, 0f), scale = Vec3(2.2f, 1f, 2.2f)),
-            mesh = PrimitiveMeshFactory.createPlane(3.2f, 3.2f, 4),
-            material = MaterialData(name = "Charcoal Floor", baseColor = 0xFF1F2937, roughness = 0.85f, metallic = 0.05f)
-        )
+        val envStage = Environment3DFactory.buildEnvironmentSetNode(BackdropPreset.STUDIO_DARK)!!
         val pedestalProp = SceneNode(
             name = "Accent Torus",
             nodeType = NodeType.MESH,
@@ -83,18 +281,7 @@ class StudioRepository(private val context: Context) {
                 emissionStrength = 0.18f
             )
         )
-        val keyLight = SceneNode(
-            name = "Key Light",
-            nodeType = NodeType.LIGHT,
-            transform = Transform3D(position = Vec3(3.2f, 4.5f, 3.6f)),
-            light = LightData(LightType.POINT, 0xFFF8FAFC, 1.8f, 18f, true)
-        )
-        val rimLight = SceneNode(
-            name = "Cyan Rim Light",
-            nodeType = NodeType.LIGHT,
-            transform = Transform3D(position = Vec3(-3.0f, 2.8f, -2.6f)),
-            light = LightData(LightType.POINT, 0xFF22D3EE, 1.35f, 14f, false)
-        )
+        val lights = Environment3DFactory.buildLightsForBackdrop(BackdropPreset.STUDIO_DARK)
         val mainCam = SceneNode(
             name = "Main Camera",
             nodeType = NodeType.CAMERA,
@@ -122,7 +309,7 @@ class StudioRepository(private val context: Context) {
         val doc = SceneDocument(
             projectId = id,
             projectName = "Quick-Start Studio Scene",
-            nodes = listOf(hero, floor, pedestalProp, keyLight, rimLight, mainCam),
+            nodes = listOf(hero, envStage, pedestalProp) + lights + mainCam,
             timeline = TimelineState(
                 fps = 30,
                 totalFrames = 120,
@@ -130,7 +317,8 @@ class StudioRepository(private val context: Context) {
                 isLooping = true,
                 keyframes = kfs,
                 clips = listOf(clip)
-            )
+            ),
+            backdropPreset = BackdropPreset.STUDIO_DARK
         )
         saveProject(doc, isRecovery = false)
         doc
@@ -162,7 +350,8 @@ class StudioRepository(private val context: Context) {
             projectId = id,
             projectName = title.ifBlank { "New 3D Project" },
             nodes = listOf(cube, keyLight, cam),
-            timeline = TimelineState(fps = 30, totalFrames = 120)
+            timeline = TimelineState(fps = 30, totalFrames = 120),
+            backdropPreset = BackdropPreset.STUDIO_DARK
         )
         saveProject(doc, isRecovery = false)
         doc
@@ -274,7 +463,6 @@ class StudioRepository(private val context: Context) {
                 return@withContext loaded.copy(id = UUID.randomUUID().toString())
             }
         }
-        // Build genuine 3D procedural node for built-in catalog entries
         when (asset.assetCategory) {
             AssetCategory.LIGHTS.name -> SceneNode(
                 name = asset.name,
@@ -288,13 +476,16 @@ class StudioRepository(private val context: Context) {
                 transform = Transform3D(position = Vec3(0f, 1.6f, 5.2f)),
                 camera = CameraData(fov = 45f, isActive = true)
             )
-            AssetCategory.ENVIRONMENTS.name -> SceneNode(
-                name = asset.name,
-                nodeType = NodeType.MESH,
-                primitiveKind = PrimitiveKind.PLANE,
-                mesh = PrimitiveMeshFactory.createPlane(6f, 6f, 6),
-                material = MaterialData(name = asset.name, baseColor = asset.primaryColorHex, roughness = 0.85f)
-            )
+            AssetCategory.ENVIRONMENTS.name -> {
+                val preset = when (asset.id) {
+                    "asset_env_village" -> BackdropPreset.VILLAGE_SUNSET
+                    "asset_env_city" -> BackdropPreset.TWILIGHT_CITY
+                    "asset_env_forest" -> BackdropPreset.FOREST_MEADOW
+                    "asset_env_cyber" -> BackdropPreset.CYBER_NEON
+                    else -> BackdropPreset.STUDIO_DARK
+                }
+                Environment3DFactory.buildEnvironmentSetNode(preset)!!
+            }
             else -> {
                 val archetype = runCatching { CharacterArchetype.valueOf(asset.archetype) }.getOrDefault(CharacterArchetype.HUMANOID)
                 val costume = runCatching { CostumePreset.valueOf(asset.costumePreset) }.getOrDefault(CostumePreset.ORIGINAL_HERO)
@@ -316,10 +507,54 @@ class StudioRepository(private val context: Context) {
     }
 
     companion object {
-        /**
-         * Builds the genuine 3D mesh & material used to render real 3D shaded preview thumbnails
-         * for built-in characters, custom creator characters, imported Blender models, and studio props.
-         */
+        val STARTER_TEMPLATES: List<StarterTemplateInfo> = listOf(
+            StarterTemplateInfo(
+                id = "tpl_village_sunset",
+                title = "Village Sunset Walk",
+                subtitle = "16:9 • Aarav walking along golden-hour 3D village lane",
+                aspectLabel = "16:9",
+                backdrop = BackdropPreset.VILLAGE_SUNSET,
+                drawableResId = R.drawable.img_tpl_village_sunset_1795746105682,
+                accentHex = 0xFFF59E0B
+            ),
+            StarterTemplateInfo(
+                id = "tpl_twilight_cafe",
+                title = "Twilight Café Dialogue",
+                subtitle = "16:9 • Two rigged characters talking on twilight city street",
+                aspectLabel = "16:9",
+                backdrop = BackdropPreset.TWILIGHT_CITY,
+                drawableResId = R.drawable.img_tpl_twilight_cafe_1795746109441,
+                accentHex = 0xFF6366F1
+            ),
+            StarterTemplateInfo(
+                id = "tpl_forest_meadow",
+                title = "Forest Dance Reel",
+                subtitle = "9:16 Vertical • Red Panda & Bima dancing in emerald meadow",
+                aspectLabel = "9:16",
+                backdrop = BackdropPreset.FOREST_MEADOW,
+                drawableResId = R.drawable.img_tpl_forest_meadow_1795746109814,
+                accentHex = 0xFF10B981
+            ),
+            StarterTemplateInfo(
+                id = "tpl_cyber_runway",
+                title = "Cyber Streetwear Stage",
+                subtitle = "16:9 • Streetwear character & Nova Bot on neon runway",
+                aspectLabel = "16:9",
+                backdrop = BackdropPreset.CYBER_NEON,
+                drawableResId = R.drawable.img_tpl_cyber_runway_1795746109811,
+                accentHex = 0xFF22D3EE
+            ),
+            StarterTemplateInfo(
+                id = "tpl_royal_castle",
+                title = "Royal Castle Duel",
+                subtitle = "16:9 • Kavi Royal Knight combat pose in dusk courtyard",
+                aspectLabel = "16:9",
+                backdrop = BackdropPreset.ROYAL_COURTYARD,
+                drawableResId = R.drawable.img_tpl_royal_castle_1795746133990,
+                accentHex = 0xFFEF4444
+            )
+        )
+
         fun buildPreviewMeshForAsset(asset: LibraryAssetEntity): Pair<com.example.engine.model.MeshData, MaterialData>? {
             val savedPath = asset.serializedNodePath
             if (savedPath != null && File(savedPath).exists()) {
@@ -407,6 +642,82 @@ class StudioRepository(private val context: Context) {
         asset.serializedNodePath?.let { File(it).delete() }
     }
 
+    private fun buildBuiltInPoseCatalog(): List<SavedPoseEntity> {
+        fun pose(id: String, name: String, cat: String, accent: Long, map: Map<String, Vec3>) = SavedPoseEntity(
+            id = id,
+            name = name,
+            category = cat,
+            poseJson = SceneSerializer.serializePoseMap(map),
+            boneCount = map.size,
+            isBuiltIn = true,
+            accentHex = accent
+        )
+        return listOf(
+            pose("pose_t_pose", "T-Pose (Rig Bind)", "Core", 0xFF22D3EE, mapOf(
+                "l_upper_arm" to Vec3(0f, 0f, -86f), "r_upper_arm" to Vec3(0f, 0f, 86f),
+                "l_forearm" to Vec3.ZERO, "r_forearm" to Vec3.ZERO,
+                "l_thigh" to Vec3.ZERO, "r_thigh" to Vec3.ZERO, "l_shin" to Vec3.ZERO, "r_shin" to Vec3.ZERO,
+                "spine" to Vec3.ZERO, "head" to Vec3.ZERO
+            )),
+            pose("pose_a_pose", "A-Pose (Neutral)", "Core", 0xFF6366F1, mapOf(
+                "l_upper_arm" to Vec3(0f, 0f, -38f), "r_upper_arm" to Vec3(0f, 0f, 38f),
+                "l_forearm" to Vec3(-8f, 0f, 0f), "r_forearm" to Vec3(-8f, 0f, 0f),
+                "l_thigh" to Vec3(0f, 0f, -5f), "r_thigh" to Vec3(0f, 0f, 5f)
+            )),
+            pose("pose_heroic", "Heroic Stance", "Action", 0xFFF59E0B, mapOf(
+                "spine" to Vec3(-6f, 12f, 0f), "head" to Vec3(4f, -12f, 0f),
+                "l_upper_arm" to Vec3(14f, 0f, -26f), "l_forearm" to Vec3(-42f, 0f, 18f),
+                "r_upper_arm" to Vec3(-12f, 0f, 34f), "r_forearm" to Vec3(-56f, 0f, -24f),
+                "l_thigh" to Vec3(-12f, 0f, -10f), "l_shin" to Vec3(14f, 0f, 0f),
+                "r_thigh" to Vec3(10f, 0f, 10f), "r_shin" to Vec3(8f, 0f, 0f)
+            )),
+            pose("pose_wave", "Wave Hello", "Social", 0xFF10B981, mapOf(
+                "spine" to Vec3(0f, -8f, -5f), "head" to Vec3(-4f, 10f, 6f),
+                "r_upper_arm" to Vec3(-20f, 0f, 138f), "r_forearm" to Vec3(-18f, 0f, -32f),
+                "l_upper_arm" to Vec3(8f, 0f, -14f), "l_forearm" to Vec3(-22f, 0f, 0f)
+            )),
+            pose("pose_run_stride", "Run Mid-Stride", "Action", 0xFFEF4444, mapOf(
+                "spine" to Vec3(18f, -14f, 0f), "head" to Vec3(-12f, 10f, 0f),
+                "l_upper_arm" to Vec3(-48f, 0f, -12f), "l_forearm" to Vec3(-72f, 0f, 0f),
+                "r_upper_arm" to Vec3(46f, 0f, 12f), "r_forearm" to Vec3(-58f, 0f, 0f),
+                "l_thigh" to Vec3(-48f, 0f, 0f), "l_shin" to Vec3(44f, 0f, 0f),
+                "r_thigh" to Vec3(42f, 0f, 0f), "r_shin" to Vec3(68f, 0f, 0f)
+            )),
+            pose("pose_jump_apex", "Jump Apex", "Action", 0xFF38BDF8, mapOf(
+                "spine" to Vec3(-10f, 0f, 0f), "head" to Vec3(-8f, 0f, 0f),
+                "l_upper_arm" to Vec3(-32f, 0f, -128f), "l_forearm" to Vec3(-24f, 0f, 0f),
+                "r_upper_arm" to Vec3(-32f, 0f, 128f), "r_forearm" to Vec3(-24f, 0f, 0f),
+                "l_thigh" to Vec3(-42f, 0f, -10f), "l_shin" to Vec3(76f, 0f, 0f),
+                "r_thigh" to Vec3(-26f, 0f, 10f), "r_shin" to Vec3(54f, 0f, 0f)
+            )),
+            pose("pose_combat_guard", "Combat Guard", "Combat", 0xFFEC4899, mapOf(
+                "spine" to Vec3(12f, -26f, 0f), "head" to Vec3(-6f, 24f, 0f),
+                "l_upper_arm" to Vec3(-56f, 22f, -18f), "l_forearm" to Vec3(-88f, 0f, 14f),
+                "r_upper_arm" to Vec3(-42f, -18f, 24f), "r_forearm" to Vec3(-95f, 0f, -18f),
+                "l_thigh" to Vec3(-28f, 0f, -12f), "l_shin" to Vec3(36f, 0f, 0f),
+                "r_thigh" to Vec3(22f, 0f, 14f), "r_shin" to Vec3(24f, 0f, 0f)
+            )),
+            pose("pose_victory", "Victory Cheer", "Social", 0xFFFACC15, mapOf(
+                "spine" to Vec3(-12f, 0f, 0f), "head" to Vec3(-14f, 0f, 0f),
+                "l_upper_arm" to Vec3(-14f, 0f, -148f), "l_forearm" to Vec3(-18f, 0f, 16f),
+                "r_upper_arm" to Vec3(-14f, 0f, 148f), "r_forearm" to Vec3(-18f, 0f, -16f),
+                "l_thigh" to Vec3(-8f, 0f, -12f), "r_thigh" to Vec3(-8f, 0f, 12f)
+            )),
+            pose("pose_sit_relaxed", "Relaxed Sit", "Social", 0xFFA855F7, mapOf(
+                "spine" to Vec3(6f, 0f, 0f), "head" to Vec3(-4f, 6f, 0f),
+                "l_upper_arm" to Vec3(-24f, 0f, -14f), "l_forearm" to Vec3(-44f, 0f, 0f),
+                "r_upper_arm" to Vec3(-24f, 0f, 14f), "r_forearm" to Vec3(-44f, 0f, 0f),
+                "l_thigh" to Vec3(-86f, 0f, -6f), "l_shin" to Vec3(84f, 0f, 0f),
+                "r_thigh" to Vec3(-86f, 0f, 6f), "r_shin" to Vec3(84f, 0f, 0f)
+            )),
+            pose("pose_deep_bow", "Respectful Bow", "Social", 0xFF14B8A6, mapOf(
+                "spine" to Vec3(46f, 0f, 0f), "head" to Vec3(16f, 0f, 0f),
+                "l_upper_arm" to Vec3(14f, 0f, -12f), "l_forearm" to Vec3(-24f, 0f, 18f),
+                "r_upper_arm" to Vec3(14f, 0f, 12f), "r_forearm" to Vec3(-24f, 0f, -18f)
+            ))
+        )
+    }
+
     private fun buildBuiltInLibraryCatalog(): List<LibraryAssetEntity> {
         val now = System.currentTimeMillis()
         fun entry(
@@ -432,7 +743,7 @@ class StudioRepository(private val context: Context) {
             primaryColorHex = c1,
             secondaryColorHex = c2,
             meshCount = 1,
-            vertexCount = 720,
+            vertexCount = 780,
             boneCount = bones,
             animationCount = 16,
             isPinned = pinned,
@@ -442,6 +753,7 @@ class StudioRepository(private val context: Context) {
         )
 
         return listOf(
+            entry("char_streetwear_maya", "Maya Streetwear", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.FORMAL, 0xFF1E222A, 0xFFE2E8F0, 11, pinned = true),
             entry("char_desi_hero", "Aarav (Desi Festive)", AssetCategory.CHARACTERS, CharacterCategory.DESI, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.INDIAN_TRADITIONAL, 0xFFDC2626, 0xFFF59E0B, 11, pinned = true),
             entry("char_cyber_bot", "Nova Cyber Bot", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.ORIGINAL_HERO, 0xFFF1F5F9, 0xFF22D3EE, 11, pinned = true),
             entry("char_royal_knight", "Kavi Royal Knight", AssetCategory.CHARACTERS, CharacterCategory.LATEST, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.FANTASY, 0xFF94A3B8, 0xFF6366F1, 11, pinned = true),
@@ -458,7 +770,11 @@ class StudioRepository(private val context: Context) {
             entry("char_rel_shrine", "Temple Bell Shrine", AssetCategory.PROPS, CharacterCategory.RELIGIOUS, OrientationFilter.FRONT, CharacterArchetype.PROP_SHRINE, CostumePreset.MYTHOLOGICAL, 0xFFD97706, 0xFFFEF3C7, 0),
             entry("char_horror_phantom", "Midnight Phantom", AssetCategory.CHARACTERS, CharacterCategory.HORROR, OrientationFilter.RIG_360, CharacterArchetype.FLOATING_SPIRIT, CostumePreset.FANTASY, 0xFF312E81, 0xFF22D3EE, 11),
             entry("char_blender_mannequin", "Studio Rig Mannequin", AssetCategory.SKELETONS, CharacterCategory.BLENDER, OrientationFilter.RIG_360, CharacterArchetype.HUMANOID, CostumePreset.ORIGINAL_HERO, 0xFF6366F1, 0xFF22D3EE, 11, pinned = true),
-            entry("asset_env_stage", "Studio Ground Plane", AssetCategory.ENVIRONMENTS, CharacterCategory.CUSTOM, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FORMAL, 0xFF1E293B, 0xFF334155, 0),
+            entry("asset_env_stage", "3D Studio Cyclorama", AssetCategory.ENVIRONMENTS, CharacterCategory.CUSTOM, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FORMAL, 0xFF1E293B, 0xFF22D3EE, 0),
+            entry("asset_env_village", "3D Village Sunset Set", AssetCategory.ENVIRONMENTS, CharacterCategory.VILLAGE, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.VILLAGE, 0xFFC29B61, 0xFFF59E0B, 0),
+            entry("asset_env_city", "3D Twilight City Set", AssetCategory.ENVIRONMENTS, CharacterCategory.WESTERN, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FORMAL, 0xFF1E293B, 0xFF6366F1, 0),
+            entry("asset_env_forest", "3D Forest Meadow Set", AssetCategory.ENVIRONMENTS, CharacterCategory.ANIMALS, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FANTASY, 0xFF2D6A31, 0xFF22C55E, 0),
+            entry("asset_env_cyber", "3D Cyber Runway Set", AssetCategory.ENVIRONMENTS, CharacterCategory.LATEST, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.ORIGINAL_HERO, 0xFF0A0D18, 0xFF22D3EE, 0),
             entry("asset_light_key", "Warm Studio Key Light", AssetCategory.LIGHTS, CharacterCategory.CUSTOM, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FORMAL, 0xFFFFF1D0, 0xFFF59E0B, 0),
             entry("asset_cam_cine", "Cinematic 35mm Camera", AssetCategory.CAMERAS, CharacterCategory.CUSTOM, OrientationFilter.ALL, CharacterArchetype.PROP_SHRINE, CostumePreset.FORMAL, 0xFF38BDF8, 0xFF6366F1, 0)
         )
